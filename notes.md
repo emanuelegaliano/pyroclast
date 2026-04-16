@@ -36,7 +36,7 @@ Il pipeline completo è una sequenza di due stadi **Map/Reduce**, entrambi esegu
 ```
 Kernel 1 — Preprocessing:
   MAP:    P[i][j], H[i][j]  →  P'[i][j] = P[i][j] · H[i][j]     (n² work-item)
-  REDUCE: P'[i][j]          →  p_vec[k]  (stream compaction)      (n² → N_c)
+  STREAM COMPACTION: P'[i][j] →  p_vec[k]                       (n² → N_c)
 
 Kernel 2 — Monte Carlo:
   MAP:    p_vec[k], x~U(0,1) →  invaded[r][k] = (x ≤ p_vec[k])  (R·N_c work-item)
