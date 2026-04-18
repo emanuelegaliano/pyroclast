@@ -4,20 +4,30 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyroclast"
-version = "0.1.0"
+version = "0.2.0"
 description = "Monte Carlo GPU simulation of lava flow impact on vegetation habitats"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "emanuelegaliano", email = "ema018gal@gmail.com" }]
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
     "rasterio>=1.3",
     "pyopencl>=2024.1",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "pytest-cov",
+    "pytest-timeout",
+    "sphinx>=7.0",
+    "numpydoc>=1.7",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["pyroclast"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

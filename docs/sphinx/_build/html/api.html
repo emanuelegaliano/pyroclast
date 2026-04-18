@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="./">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>API Reference &#8212; pyroclast 0.1.0 documentation</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=5ecbeea2" />
+    <link rel="stylesheet" type="text/css" href="_static/basic.css?v=b08954a9" />
+    <link rel="stylesheet" type="text/css" href="_static/alabaster.css?v=27fed22d" />
+    <script src="_static/documentation_options.js?v=01f34227"></script>
+    <script src="_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="prev" title="pyroclast" href="index.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <section id="api-reference">
+<h1>API Reference<a class="headerlink" href="#api-reference" title="Link to this heading">¶</a></h1>
+<section id="module-pyroclast.domain.models">
+<span id="domain"></span><h2>Domain<a class="headerlink" href="#module-pyroclast.domain.models" title="Link to this heading">¶</a></h2>
+<p>Domain Value Objects for the pyroclast simulation.</p>
+<p>This module is the innermost layer of the Ports &amp; Adapters (Hexagonal)
+architecture.  It has <strong>no dependencies</strong> on infrastructure, frameworks, or
+I/O libraries — only on the Python standard library and NumPy.</p>
+<section id="architectural-role">
+<h3>Architectural role<a class="headerlink" href="#architectural-role" title="Link to this heading">¶</a></h3>
+<p>Value Objects live in the <em>domain</em> ring.  They are created by Adapters after
+GPU computation and consumed by the Service Layer, higher-level analytics, or
+the Monte Carlo engine.  Their immutability guarantees referential transparency:
+a <code class="docutils literal notranslate"><span class="pre">CompactedHabitat</span></code> always represents the same physical state.</p>
+</section>
+<dl class="py class">
+<dt class="sig sig-object py" id="pyroclast.domain.models.CompactedHabitat">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pyroclast.domain.models.</span></span><span class="sig-name descname"><span class="pre">CompactedHabitat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">habitat_code</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_cells</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">p_vec</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/domain/models.html#CompactedHabitat"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.domain.models.CompactedHabitat" title="Link to this definition">¶</a></dt>
+<dd><p>Immutable Value Object holding the GPU-preprocessed state of one habitat.</p>
+<p>After the Map kernel multiplies the invasion-probability raster by the
+habitat-presence mask, the result is a sparse float32 array where the
+vast majority of entries are zero (cells outside the habitat).
+<code class="docutils literal notranslate"><span class="pre">CompactedHabitat</span></code> stores only the <em>active</em> (non-zero) cells — the
+outcome of the stream-compaction step — together with the metadata needed
+to identify the habitat in subsequent pipeline stages.</p>
+<section id="id1">
+<h3>Architectural role<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
+<p>This class is a <em>Value Object</em> in the DDD (Domain-Driven Design) sense: two instances with the
+same <code class="docutils literal notranslate"><span class="pre">habitat_code</span></code> and <code class="docutils literal notranslate"><span class="pre">n_cells</span></code> are considered structurally equal,
+regardless of the specific probability values they carry.  The probability
+vector <code class="docutils literal notranslate"><span class="pre">p_vec</span></code> is excluded from equality and hashing because:</p>
+<ul class="simple">
+<li><p>NumPy <code class="docutils literal notranslate"><span class="pre">__eq__</span></code> returns an element-wise boolean array, which would
+break the dataclass-generated comparisons.</p></li>
+<li><p>The semantic identity of a habitat snapshot is fully captured by its
+code and the count of active cells; <code class="docutils literal notranslate"><span class="pre">p_vec</span></code> is the payload, not the
+identity.</p></li>
+</ul>
+</section>
+<section id="immutability">
+<h3>Immutability<a class="headerlink" href="#immutability" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">frozen=True</span></code> prevents attribute reassignment after construction.  Note
+that the <em>contents</em> of <code class="docutils literal notranslate"><span class="pre">p_vec</span></code> (the underlying NumPy buffer) remain
+technically mutable; callers should treat the array as read-only.  A
+defensive copy can be obtained via <code class="docutils literal notranslate"><span class="pre">habitat.p_vec.copy()</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">param habitat_code<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Identifier of the habitat type (e.g. <code class="docutils literal notranslate"><span class="pre">&quot;9340&quot;</span></code> for <em>Quercus ilex</em>
+forests), as extracted from the GeoTIFF filename by
+<code class="docutils literal notranslate"><span class="pre">FileMapStrategy</span></code>.  Must be a non-empty string.</p>
+</dd>
+<dt class="field-even">type habitat_code<span class="colon">:</span></dt>
+<dd class="field-even"><p>str</p>
+</dd>
+<dt class="field-odd">param n_cells<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Number of active cells after stream compaction, i.e. <code class="docutils literal notranslate"><span class="pre">len(p_vec)</span></code>.
+Must be non-negative and consistent with the length of <code class="docutils literal notranslate"><span class="pre">p_vec</span></code>.</p>
+</dd>
+<dt class="field-even">type n_cells<span class="colon">:</span></dt>
+<dd class="field-even"><p>int</p>
+</dd>
+<dt class="field-odd">param p_vec<span class="colon">:</span></dt>
+<dd class="field-odd"><p>1-D <code class="docutils literal notranslate"><span class="pre">float32</span></code> array of length <code class="docutils literal notranslate"><span class="pre">n_cells</span></code> containing the per-cell
+invasion probability values for the active habitat cells
+(values in <code class="docutils literal notranslate"><span class="pre">[0.0,</span> <span class="pre">1.0]</span></code>).  Excluded from <code class="docutils literal notranslate"><span class="pre">__eq__</span></code> and
+<code class="docutils literal notranslate"><span class="pre">__hash__</span></code>; see the note above.</p>
+</dd>
+<dt class="field-even">type p_vec<span class="colon">:</span></dt>
+<dd class="field-even"><p>numpy.ndarray</p>
+</dd>
+<dt class="field-odd">raises ValueError<span class="colon">:</span></dt>
+<dd class="field-odd"><p>If <code class="docutils literal notranslate"><span class="pre">habitat_code</span></code> is empty, <code class="docutils literal notranslate"><span class="pre">n_cells</span></code> is negative, <code class="docutils literal notranslate"><span class="pre">p_vec</span></code> is
+    not 1-D, <code class="docutils literal notranslate"><span class="pre">p_vec.dtype</span></code> is not <code class="docutils literal notranslate"><span class="pre">float32</span></code>, or
+    <code class="docutils literal notranslate"><span class="pre">len(p_vec)</span> <span class="pre">!=</span> <span class="pre">n_cells</span></code>.</p>
+</dd>
+</dl>
+<p class="rubric">Examples</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">p</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.9</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">h</span> <span class="o">=</span> <span class="n">CompactedHabitat</span><span class="p">(</span><span class="n">habitat_code</span><span class="o">=</span><span class="s2">&quot;9340&quot;</span><span class="p">,</span> <span class="n">n_cells</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">p_vec</span><span class="o">=</span><span class="n">p</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">h</span><span class="o">.</span><span class="n">total_probability</span>
+<span class="go">1.5</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">h</span><span class="o">.</span><span class="n">mean_probability</span>
+<span class="go">0.5</span>
+</pre></div>
+</div>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="pyroclast.domain.models.CompactedHabitat.habitat_code">
+<span class="sig-name descname"><span class="pre">habitat_code</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span><a class="headerlink" href="#pyroclast.domain.models.CompactedHabitat.habitat_code" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="pyroclast.domain.models.CompactedHabitat.n_cells">
+<span class="sig-name descname"><span class="pre">n_cells</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><a class="headerlink" href="#pyroclast.domain.models.CompactedHabitat.n_cells" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="pyroclast.domain.models.CompactedHabitat.p_vec">
+<span class="sig-name descname"><span class="pre">p_vec</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)"><span class="pre">ndarray</span></a></span><a class="headerlink" href="#pyroclast.domain.models.CompactedHabitat.p_vec" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pyroclast.domain.models.CompactedHabitat.total_probability">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">total_probability</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><a class="headerlink" href="#pyroclast.domain.models.CompactedHabitat.total_probability" title="Link to this definition">¶</a></dt>
+<dd><p>Sum of invasion probabilities across all active habitat cells.</p>
+<p>This is a proxy for the <em>expected number of active cells</em> that will be
+reached by a lava flow, under the assumption that cell events are
+independent.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><code class="docutils literal notranslate"><span class="pre">float(np.sum(self.p_vec))</span></code>.  Returns <code class="docutils literal notranslate"><span class="pre">0.0</span></code> when <code class="docutils literal notranslate"><span class="pre">n_cells</span></code>
+is zero.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)">float</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pyroclast.domain.models.CompactedHabitat.mean_probability">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">mean_probability</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><a class="headerlink" href="#pyroclast.domain.models.CompactedHabitat.mean_probability" title="Link to this definition">¶</a></dt>
+<dd><p>Mean invasion probability across active habitat cells.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><code class="docutils literal notranslate"><span class="pre">float(np.mean(self.p_vec))</span></code>.  Returns <code class="docutils literal notranslate"><span class="pre">0.0</span></code> when <code class="docutils literal notranslate"><span class="pre">n_cells</span></code>
+is zero to avoid division by zero.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)">float</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>habitat_code</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a>)</p></li>
+<li><p><strong>n_cells</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><em>int</em></a>)</p></li>
+<li><p><strong>p_vec</strong> (<a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)"><em>ndarray</em></a>)</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+<section id="module-pyroclast.ABCs.repository">
+<span id="abstract-interfaces-ports"></span><h2>Abstract Interfaces (Ports)<a class="headerlink" href="#module-pyroclast.ABCs.repository" title="Link to this heading">¶</a></h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="pyroclast.ABCs.repository.MapCriteria">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pyroclast.ABCs.repository.</span></span><span class="sig-name descname"><span class="pre">MapCriteria</span></span><a class="reference internal" href="_modules/pyroclast/ABCs/repository.html#MapCriteria"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.ABCs.repository.MapCriteria" title="Link to this definition">¶</a></dt>
+<dd><p>Query predicate passed to the repository.</p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="pyroclast.ABCs.repository.RasterMap">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pyroclast.ABCs.repository.</span></span><span class="sig-name descname"><span class="pre">RasterMap</span></span><a class="reference internal" href="_modules/pyroclast/ABCs/repository.html#RasterMap"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.ABCs.repository.RasterMap" title="Link to this definition">¶</a></dt>
+<dd><p>A single raster layer — the domain object.</p>
+<dl class="py property">
+<dt class="sig sig-object py" id="pyroclast.ABCs.repository.RasterMap.code">
+<span class="property"><span class="k"><span class="pre">abstract</span></span><span class="w"> </span><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">code</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span><a class="headerlink" href="#pyroclast.ABCs.repository.RasterMap.code" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pyroclast.ABCs.repository.RasterMap.kind">
+<span class="property"><span class="k"><span class="pre">abstract</span></span><span class="w"> </span><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">kind</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span><a class="headerlink" href="#pyroclast.ABCs.repository.RasterMap.kind" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pyroclast.ABCs.repository.RasterMap.data">
+<span class="property"><span class="k"><span class="pre">abstract</span></span><span class="w"> </span><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">data</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)"><span class="pre">ndarray</span></a></span><a class="headerlink" href="#pyroclast.ABCs.repository.RasterMap.data" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyroclast.ABCs.repository.RasterMap.satisfies">
+<span class="property"><span class="k"><span class="pre">abstractmethod</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">satisfies</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">criteria</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/ABCs/repository.html#RasterMap.satisfies"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.ABCs.repository.RasterMap.satisfies" title="Link to this definition">¶</a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>criteria</strong> (<a class="reference internal" href="#pyroclast.ABCs.repository.MapCriteria" title="pyroclast.ABCs.repository.MapCriteria"><em>MapCriteria</em></a>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)">bool</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="pyroclast.ABCs.repository.MapRepositoryStrategy">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pyroclast.ABCs.repository.</span></span><span class="sig-name descname"><span class="pre">MapRepositoryStrategy</span></span><a class="reference internal" href="_modules/pyroclast/ABCs/repository.html#MapRepositoryStrategy"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.ABCs.repository.MapRepositoryStrategy" title="Link to this definition">¶</a></dt>
+<dd><p>Holds the actual collection of maps and filters them.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="pyroclast.ABCs.repository.MapRepositoryStrategy.matching">
+<span class="property"><span class="k"><span class="pre">abstractmethod</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">matching</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">criteria</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/ABCs/repository.html#MapRepositoryStrategy.matching"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.ABCs.repository.MapRepositoryStrategy.matching" title="Link to this definition">¶</a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>criteria</strong> (<a class="reference internal" href="#pyroclast.ABCs.repository.MapCriteria" title="pyroclast.ABCs.repository.MapCriteria"><em>MapCriteria</em></a>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><a class="reference external" href="https://docs.python.org/3/library/collections.abc.html#collections.abc.Sequence" title="(in Python v3.14)"><em>Sequence</em></a>[<a class="reference internal" href="#pyroclast.ABCs.repository.RasterMap" title="pyroclast.ABCs.repository.RasterMap"><em>RasterMap</em></a>]</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="pyroclast.ABCs.repository.MapRepository">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pyroclast.ABCs.repository.</span></span><span class="sig-name descname"><span class="pre">MapRepository</span></span><a class="reference internal" href="_modules/pyroclast/ABCs/repository.html#MapRepository"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.ABCs.repository.MapRepository" title="Link to this definition">¶</a></dt>
+<dd><p>Entry point for clients — delegates to a MapRepositoryStrategy.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="pyroclast.ABCs.repository.MapRepository.matching">
+<span class="property"><span class="k"><span class="pre">abstractmethod</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">matching</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">criteria</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/ABCs/repository.html#MapRepository.matching"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.ABCs.repository.MapRepository.matching" title="Link to this definition">¶</a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>criteria</strong> (<a class="reference internal" href="#pyroclast.ABCs.repository.MapCriteria" title="pyroclast.ABCs.repository.MapCriteria"><em>MapCriteria</em></a>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><a class="reference external" href="https://docs.python.org/3/library/collections.abc.html#collections.abc.Sequence" title="(in Python v3.14)"><em>Sequence</em></a>[<a class="reference internal" href="#pyroclast.ABCs.repository.RasterMap" title="pyroclast.ABCs.repository.RasterMap"><em>RasterMap</em></a>]</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyroclast.ABCs.repository.MapRepository.get">
+<span class="sig-name descname"><span class="pre">get</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">criteria</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/ABCs/repository.html#MapRepository.get"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.ABCs.repository.MapRepository.get" title="Link to this definition">¶</a></dt>
+<dd><p>Return the single map matching criteria. Raises if not exactly one.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>criteria</strong> (<a class="reference internal" href="#pyroclast.ABCs.repository.MapCriteria" title="pyroclast.ABCs.repository.MapCriteria"><em>MapCriteria</em></a>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><a class="reference internal" href="#pyroclast.ABCs.repository.RasterMap" title="pyroclast.ABCs.repository.RasterMap"><em>RasterMap</em></a></p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<p id="module-pyroclast.ABCs.compute">Compute Port — abstract interface for GPU/CPU preprocessing backends.</p>
+<p>This module defines the <em>Port</em> through which the Service Layer communicates
+with any compute back-end.  Following the Ports &amp; Adapters (Hexagonal)
+architecture, the Service Layer depends <strong>only</strong> on this interface; it never
+imports PyOpenCL, CUDA, or any hardware-specific library directly.</p>
+<section id="id2">
+<h3>Architectural role<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<p><em>Ports</em> sit on the boundary between the application core (domain + services)
+and the infrastructure.  <code class="docutils literal notranslate"><span class="pre">IComputeAdapter</span></code> is a <strong>driven port</strong> (also called
+a <em>secondary</em> or <em>right-side</em> port): the application calls it to delegate
+work to an external system (the GPU).</p>
+<p>Any class that implements <code class="docutils literal notranslate"><span class="pre">IComputeAdapter</span></code> is an <em>Adapter</em> and lives in
+<code class="docutils literal notranslate"><span class="pre">pyroclast/adapters/</span></code>.  Swapping from PyOpenCL to CUDA, Metal, or a pure
+NumPy CPU fallback requires only a different <code class="docutils literal notranslate"><span class="pre">IComputeAdapter</span></code> implementation
+— the Service Layer code is unchanged.</p>
+<div class="admonition seealso">
+<p class="admonition-title">See also</p>
+<dl class="simple">
+<dt><a class="reference internal" href="#pyroclast.adapters.opencl_adapter.PyOpenCLAdapter" title="pyroclast.adapters.opencl_adapter.PyOpenCLAdapter"><code class="xref py py-obj docutils literal notranslate"><span class="pre">pyroclast.adapters.opencl_adapter.PyOpenCLAdapter</span></code></a></dt><dd><p>reference GPU implementation.</p>
+</dd>
+<dt><a class="reference internal" href="#pyroclast.services.preprocessing.run_preprocessing_batch" title="pyroclast.services.preprocessing.run_preprocessing_batch"><code class="xref py py-obj docutils literal notranslate"><span class="pre">pyroclast.services.preprocessing.run_preprocessing_batch</span></code></a></dt><dd><p>primary consumer.</p>
+</dd>
+</dl>
+</div>
+</section>
+<dl class="py class">
+<dt class="sig sig-object py" id="pyroclast.ABCs.compute.IComputeAdapter">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pyroclast.ABCs.compute.</span></span><span class="sig-name descname"><span class="pre">IComputeAdapter</span></span><a class="reference internal" href="_modules/pyroclast/ABCs/compute.html#IComputeAdapter"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.ABCs.compute.IComputeAdapter" title="Link to this definition">¶</a></dt>
+<dd><p>Abstract Port for batch preprocessing of habitat rasters on a compute device.</p>
+<p>An <code class="docutils literal notranslate"><span class="pre">IComputeAdapter</span></code> receives the invasion-probability raster and a
+collection of habitat rasters, executes the element-wise multiplication
+(Map kernel) on a compute device, performs stream compaction to discard
+zero cells, and returns a list of <a class="reference internal" href="#pyroclast.domain.models.CompactedHabitat" title="pyroclast.domain.models.CompactedHabitat"><code class="xref py py-class docutils literal notranslate"><span class="pre">CompactedHabitat</span></code></a>
+Value Objects ready for the Monte Carlo simulation.</p>
+<p>Implementations are responsible for:</p>
+<ul class="simple">
+<li><p>Device initialisation (context, command queue, kernel compilation).</p></li>
+<li><p>Memory management: allocation, host→device transfers, device→host
+readback, and deallocation.</p></li>
+<li><p>Stream compaction: filtering cells with probability &gt; 0.</p></li>
+</ul>
+<p>The invasion map buffer <strong>should</strong> be transferred to the device only once
+per <code class="docutils literal notranslate"><span class="pre">batch_preprocess</span></code> call, even when multiple habitats are processed.</p>
+<p class="rubric">Notes</p>
+<p>Implementors must be careful to release all device-side buffers before
+returning, to avoid VRAM leaks when the service layer calls this method
+repeatedly (e.g. in a batch loop with partial caching).</p>
+<p class="rubric">Examples</p>
+<p>Typical usage inside the service layer:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">adapter</span><span class="p">:</span> <span class="n">IComputeAdapter</span> <span class="o">=</span> <span class="n">PyOpenCLAdapter</span><span class="p">()</span>
+<span class="n">invasion</span> <span class="o">=</span> <span class="n">repo</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">InvasionCriteria</span><span class="p">())</span>
+<span class="n">habitats</span> <span class="o">=</span> <span class="n">repo</span><span class="o">.</span><span class="n">matching</span><span class="p">(</span><span class="n">HabitatCriteria</span><span class="p">())</span>
+<span class="n">results</span> <span class="o">=</span> <span class="n">adapter</span><span class="o">.</span><span class="n">batch_preprocess</span><span class="p">(</span><span class="n">invasion</span><span class="p">,</span> <span class="n">habitats</span><span class="p">)</span>
+</pre></div>
+</div>
+<dl class="py method">
+<dt class="sig sig-object py" id="pyroclast.ABCs.compute.IComputeAdapter.batch_preprocess">
+<span class="property"><span class="k"><span class="pre">abstractmethod</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">batch_preprocess</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">invasion_map</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">habitats</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/ABCs/compute.html#IComputeAdapter.batch_preprocess"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.ABCs.compute.IComputeAdapter.batch_preprocess" title="Link to this definition">¶</a></dt>
+<dd><p>Execute the Map kernel + stream compaction for a batch of habitats.</p>
+<p>Transfers the <code class="docutils literal notranslate"><span class="pre">invasion_map</span></code> to device memory once, then iterates
+over <code class="docutils literal notranslate"><span class="pre">habitats</span></code>: for each one it copies the habitat raster to the
+device, runs the <code class="docutils literal notranslate"><span class="pre">map_multiply</span></code> kernel, reads back the result, and
+applies stream compaction (retaining only cells with value &gt; 0).</p>
+<p>The output list is in the <strong>same order</strong> as the input <code class="docutils literal notranslate"><span class="pre">habitats</span></code>
+sequence, enabling callers to zip inputs and outputs without
+additional bookkeeping.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>invasion_map</strong> (<a class="reference internal" href="#pyroclast.ABCs.repository.RasterMap" title="pyroclast.ABCs.repository.RasterMap"><em>RasterMap</em></a>) – The invasion-probability raster.  <code class="docutils literal notranslate"><span class="pre">invasion_map.data</span></code> must be a
+2-D <code class="docutils literal notranslate"><span class="pre">numpy.ndarray</span></code> of dtype <code class="docutils literal notranslate"><span class="pre">float32</span></code> with values in
+<code class="docutils literal notranslate"><span class="pre">[0.0,</span> <span class="pre">1.0]</span></code>.  NaN values must have been replaced with <code class="docutils literal notranslate"><span class="pre">0.0</span></code>
+before this call (guaranteed by <code class="docutils literal notranslate"><span class="pre">FileMapStrategy</span></code>).</p></li>
+<li><p><strong>habitats</strong> (<em>Sequence</em><em>[</em><a class="reference internal" href="#pyroclast.ABCs.repository.RasterMap" title="pyroclast.ABCs.repository.RasterMap"><em>RasterMap</em></a><em>]</em>) – Ordered sequence of habitat-presence rasters.  Each
+<code class="docutils literal notranslate"><span class="pre">habitat.data</span></code> must be a 2-D <code class="docutils literal notranslate"><span class="pre">numpy.ndarray</span></code> of dtype
+<code class="docutils literal notranslate"><span class="pre">uint8</span></code> with the same shape as <code class="docutils literal notranslate"><span class="pre">invasion_map.data</span></code>.
+An empty sequence is valid and returns an empty list.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>One <a class="reference internal" href="#pyroclast.domain.models.CompactedHabitat" title="pyroclast.domain.models.CompactedHabitat"><code class="xref py py-class docutils literal notranslate"><span class="pre">CompactedHabitat</span></code></a> per
+element of <code class="docutils literal notranslate"><span class="pre">habitats</span></code>, in the same order.  A habitat with no
+active cells produces a <code class="docutils literal notranslate"><span class="pre">CompactedHabitat</span></code> with <code class="docutils literal notranslate"><span class="pre">n_cells=0</span></code>
+and an empty <code class="docutils literal notranslate"><span class="pre">p_vec</span></code>.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.14)">list</a>[<a class="reference internal" href="#pyroclast.domain.models.CompactedHabitat" title="pyroclast.domain.models.CompactedHabitat">CompactedHabitat</a>]</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><ul class="simple">
+<li><p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#ValueError" title="(in Python v3.14)"><strong>ValueError</strong></a> – If the shapes of <code class="docutils literal notranslate"><span class="pre">invasion_map.data</span></code> and any <code class="docutils literal notranslate"><span class="pre">habitat.data</span></code>
+    do not match, or if dtype requirements are not satisfied.</p></li>
+<li><p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#RuntimeError" title="(in Python v3.14)"><strong>RuntimeError</strong></a> – If device initialisation or kernel compilation fails (raised by
+    the concrete implementation).</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+<section id="module-pyroclast.io.data_repository">
+<span id="i-o-adapter"></span><h2>I/O Adapter<a class="headerlink" href="#module-pyroclast.io.data_repository" title="Link to this heading">¶</a></h2>
+<p>Concrete I/O implementations for the repository layer.</p>
+<p>This module provides the infrastructure-facing side of the data-loading Port
+defined in <a class="reference internal" href="#module-pyroclast.ABCs.repository" title="pyroclast.ABCs.repository"><code class="xref py py-mod docutils literal notranslate"><span class="pre">pyroclast.ABCs.repository</span></code></a>.  It is the <strong>only</strong> place in the
+codebase that reads GeoTIFF files from disk; all other modules depend solely on
+the abstract <a class="reference internal" href="#pyroclast.ABCs.repository.RasterMap" title="pyroclast.ABCs.repository.RasterMap"><code class="xref py py-class docutils literal notranslate"><span class="pre">RasterMap</span></code></a> and
+<a class="reference internal" href="#pyroclast.ABCs.repository.MapRepository" title="pyroclast.ABCs.repository.MapRepository"><code class="xref py py-class docutils literal notranslate"><span class="pre">MapRepository</span></code></a> interfaces.</p>
+<section id="id3">
+<h3>Architectural role<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
+<p>Following the Ports &amp; Adapters pattern, this module is a <em>primary adapter</em>
+(driving adapter): it is the entry-point through which external data (GeoTIFF
+files on disk) enters the application core.</p>
+<p>The three concrete classes implement the three abstract interfaces defined in
+<a class="reference internal" href="#module-pyroclast.ABCs.repository" title="pyroclast.ABCs.repository"><code class="xref py py-mod docutils literal notranslate"><span class="pre">pyroclast.ABCs.repository</span></code></a>:</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="#pyroclast.io.data_repository.GeoTiffMap" title="pyroclast.io.data_repository.GeoTiffMap"><code class="xref py py-class docutils literal notranslate"><span class="pre">GeoTiffMap</span></code></a> implements <a class="reference internal" href="#pyroclast.ABCs.repository.RasterMap" title="pyroclast.ABCs.repository.RasterMap"><code class="xref py py-class docutils literal notranslate"><span class="pre">RasterMap</span></code></a>.</p></li>
+<li><p><a class="reference internal" href="#pyroclast.io.data_repository.FileMapStrategy" title="pyroclast.io.data_repository.FileMapStrategy"><code class="xref py py-class docutils literal notranslate"><span class="pre">FileMapStrategy</span></code></a> implements
+<a class="reference internal" href="#pyroclast.ABCs.repository.MapRepositoryStrategy" title="pyroclast.ABCs.repository.MapRepositoryStrategy"><code class="xref py py-class docutils literal notranslate"><span class="pre">MapRepositoryStrategy</span></code></a>.</p></li>
+<li><p><a class="reference internal" href="#pyroclast.io.data_repository.FileMapRepository" title="pyroclast.io.data_repository.FileMapRepository"><code class="xref py py-class docutils literal notranslate"><span class="pre">FileMapRepository</span></code></a> implements
+<a class="reference internal" href="#pyroclast.ABCs.repository.MapRepository" title="pyroclast.ABCs.repository.MapRepository"><code class="xref py py-class docutils literal notranslate"><span class="pre">MapRepository</span></code></a>.</p></li>
+</ul>
+</section>
+<section id="file-layout-conventions">
+<h3>File layout conventions<a class="headerlink" href="#file-layout-conventions" title="Link to this heading">¶</a></h3>
+<p>The adapter expects the following directory structure:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&lt;</span><span class="n">data_dir</span><span class="o">&gt;/</span>
+    <span class="o">&lt;</span><span class="n">invasion_map</span><span class="o">&gt;.</span><span class="n">tif</span>          <span class="c1"># exactly one .tif at root level</span>
+    <span class="n">habitats</span><span class="o">/</span>
+        <span class="n">cb_codice_</span><span class="o">&lt;</span><span class="n">code</span><span class="o">&gt;.</span><span class="n">tif</span>    <span class="c1"># one file per habitat type</span>
+</pre></div>
+</div>
+<p>The invasion map filename is not significant; the first <code class="docutils literal notranslate"><span class="pre">.tif</span></code> found at the
+root level (alphabetically) is used.  Habitat filenames must match the pattern
+<code class="docutils literal notranslate"><span class="pre">cb_codice_&lt;code&gt;.tif</span></code> — the <code class="docutils literal notranslate"><span class="pre">&lt;code&gt;</span></code> segment becomes the
+<a class="reference internal" href="#pyroclast.io.data_repository.GeoTiffMap.code" title="pyroclast.io.data_repository.GeoTiffMap.code"><code class="xref py py-attr docutils literal notranslate"><span class="pre">GeoTiffMap.code</span></code></a> identifier (e.g. <code class="docutils literal notranslate"><span class="pre">&quot;9340&quot;</span></code> for <em>Quercus ilex</em>).</p>
+<div class="admonition seealso">
+<p class="admonition-title">See also</p>
+<dl class="simple">
+<dt><a class="reference internal" href="#module-pyroclast.ABCs.repository" title="pyroclast.ABCs.repository"><code class="xref py py-obj docutils literal notranslate"><span class="pre">pyroclast.ABCs.repository</span></code></a></dt><dd><p>the abstract interfaces this module implements.</p>
+</dd>
+<dt><a class="reference internal" href="#module-pyroclast.adapters.opencl_adapter" title="pyroclast.adapters.opencl_adapter"><code class="xref py py-obj docutils literal notranslate"><span class="pre">pyroclast.adapters.opencl_adapter</span></code></a></dt><dd><p>the compute-side adapter.</p>
+</dd>
+</dl>
+</div>
+</section>
+<dl class="py class">
+<dt class="sig sig-object py" id="pyroclast.io.data_repository.HabitatCriteria">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pyroclast.io.data_repository.</span></span><span class="sig-name descname"><span class="pre">HabitatCriteria</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">code</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/io/data_repository.html#HabitatCriteria"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.io.data_repository.HabitatCriteria" title="Link to this definition">¶</a></dt>
+<dd><p>Query predicate that selects habitat-presence maps.</p>
+<p>Pass this to <a class="reference internal" href="#pyroclast.ABCs.repository.MapRepository.matching" title="pyroclast.ABCs.repository.MapRepository.matching"><code class="xref py py-meth docutils literal notranslate"><span class="pre">matching()</span></code></a> or
+<a class="reference internal" href="#pyroclast.ABCs.repository.MapRepository.get" title="pyroclast.ABCs.repository.MapRepository.get"><code class="xref py py-meth docutils literal notranslate"><span class="pre">get()</span></code></a> to retrieve habitat
+rasters from the repository.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>code</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em> or </em><em>None</em><em>, </em><em>optional</em>) – When provided, only the habitat whose <a class="reference internal" href="#pyroclast.io.data_repository.GeoTiffMap.code" title="pyroclast.io.data_repository.GeoTiffMap.code"><code class="xref py py-attr docutils literal notranslate"><span class="pre">GeoTiffMap.code</span></code></a> matches
+this value is selected.  When <code class="docutils literal notranslate"><span class="pre">None</span></code> (the default), all habitat maps
+are selected regardless of their code.</p>
+</dd>
+</dl>
+<p class="rubric">Examples</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">HabitatCriteria</span><span class="p">()</span>            <span class="c1"># matches all habitats</span>
+<span class="go">HabitatCriteria(code=None)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">HabitatCriteria</span><span class="p">(</span><span class="n">code</span><span class="o">=</span><span class="s2">&quot;9340&quot;</span><span class="p">)</span> <span class="c1"># matches only habitat 9340</span>
+<span class="go">HabitatCriteria(code=&#39;9340&#39;)</span>
+</pre></div>
+</div>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="pyroclast.io.data_repository.HabitatCriteria.code">
+<span class="sig-name descname"><span class="pre">code</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span><span class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></span><a class="headerlink" href="#pyroclast.io.data_repository.HabitatCriteria.code" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="pyroclast.io.data_repository.InvasionCriteria">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pyroclast.io.data_repository.</span></span><span class="sig-name descname"><span class="pre">InvasionCriteria</span></span><a class="reference internal" href="_modules/pyroclast/io/data_repository.html#InvasionCriteria"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.io.data_repository.InvasionCriteria" title="Link to this definition">¶</a></dt>
+<dd><p>Query predicate that selects the invasion-probability map.</p>
+<p>There is exactly one invasion map per dataset, so
+<a class="reference internal" href="#pyroclast.ABCs.repository.MapRepository.get" title="pyroclast.ABCs.repository.MapRepository.get"><code class="xref py py-meth docutils literal notranslate"><span class="pre">get()</span></code></a> with this criteria
+always returns a single <a class="reference internal" href="#pyroclast.io.data_repository.GeoTiffMap" title="pyroclast.io.data_repository.GeoTiffMap"><code class="xref py py-class docutils literal notranslate"><span class="pre">GeoTiffMap</span></code></a> of <code class="docutils literal notranslate"><span class="pre">kind=&quot;invasion&quot;</span></code>.</p>
+<p class="rubric">Examples</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">repo</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">InvasionCriteria</span><span class="p">())</span>   <span class="c1"># returns the invasion raster</span>
+</pre></div>
+</div>
+<dl class="field-list simple">
+</dl>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="pyroclast.io.data_repository.GeoTiffMap">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pyroclast.io.data_repository.</span></span><span class="sig-name descname"><span class="pre">GeoTiffMap</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">code</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kind</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/io/data_repository.html#GeoTiffMap"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.io.data_repository.GeoTiffMap" title="Link to this definition">¶</a></dt>
+<dd><p>A raster layer loaded from a GeoTIFF file.</p>
+<p>Implements <a class="reference internal" href="#pyroclast.ABCs.repository.RasterMap" title="pyroclast.ABCs.repository.RasterMap"><code class="xref py py-class docutils literal notranslate"><span class="pre">RasterMap</span></code></a>.  Instances are
+created by <a class="reference internal" href="#pyroclast.io.data_repository.FileMapStrategy" title="pyroclast.io.data_repository.FileMapStrategy"><code class="xref py py-class docutils literal notranslate"><span class="pre">FileMapStrategy</span></code></a> and are never constructed directly by
+application code.</p>
+<p>Each instance holds the full raster array in memory as a NumPy array.
+Habitat maps are stored as <code class="docutils literal notranslate"><span class="pre">uint8</span></code> (0/1 presence mask); the invasion map
+is stored as <code class="docutils literal notranslate"><span class="pre">float32</span></code> (probability in <code class="docutils literal notranslate"><span class="pre">[0.0,</span> <span class="pre">1.0]</span></code>, with NaN replaced
+by <code class="docutils literal notranslate"><span class="pre">0.0</span></code> at load time).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>code</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a>) – Unique identifier for this map.  For habitat maps this is the substring
+extracted from the filename pattern <code class="docutils literal notranslate"><span class="pre">cb_codice_&lt;code&gt;.tif</span></code>
+(e.g. <code class="docutils literal notranslate"><span class="pre">&quot;9340&quot;</span></code>).  For the invasion map the fixed value <code class="docutils literal notranslate"><span class="pre">&quot;invasion&quot;</span></code>
+is used.</p></li>
+<li><p><strong>kind</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a>) – Category of the map.  Either <code class="docutils literal notranslate"><span class="pre">&quot;habitat&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;invasion&quot;</span></code>.  Used by
+<a class="reference internal" href="#pyroclast.io.data_repository.GeoTiffMap.satisfies" title="pyroclast.io.data_repository.GeoTiffMap.satisfies"><code class="xref py py-meth docutils literal notranslate"><span class="pre">satisfies()</span></code></a> to dispatch criteria matching.</p></li>
+<li><p><strong>data</strong> (<a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)"><em>numpy.ndarray</em></a>) – The raster data as a 2-D NumPy array.  <code class="docutils literal notranslate"><span class="pre">dtype=uint8</span></code> for habitat
+maps, <code class="docutils literal notranslate"><span class="pre">dtype=float32</span></code> for the invasion map.</p></li>
+</ul>
+</dd>
+</dl>
+<p class="rubric">Examples</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">m</span> <span class="o">=</span> <span class="n">GeoTiffMap</span><span class="p">(</span><span class="n">code</span><span class="o">=</span><span class="s2">&quot;9340&quot;</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">&quot;habitat&quot;</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">))</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">m</span><span class="o">.</span><span class="n">code</span>
+<span class="go">&#39;9340&#39;</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">m</span><span class="o">.</span><span class="n">kind</span>
+<span class="go">&#39;habitat&#39;</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">m</span><span class="o">.</span><span class="n">satisfies</span><span class="p">(</span><span class="n">HabitatCriteria</span><span class="p">(</span><span class="n">code</span><span class="o">=</span><span class="s2">&quot;9340&quot;</span><span class="p">))</span>
+<span class="go">True</span>
+</pre></div>
+</div>
+<dl class="py property">
+<dt class="sig sig-object py" id="pyroclast.io.data_repository.GeoTiffMap.code">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">code</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span><a class="headerlink" href="#pyroclast.io.data_repository.GeoTiffMap.code" title="Link to this definition">¶</a></dt>
+<dd><p>Unique identifier of this map (e.g. <code class="docutils literal notranslate"><span class="pre">&quot;9340&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;invasion&quot;</span></code>).</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pyroclast.io.data_repository.GeoTiffMap.kind">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">kind</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span><a class="headerlink" href="#pyroclast.io.data_repository.GeoTiffMap.kind" title="Link to this definition">¶</a></dt>
+<dd><p><code class="docutils literal notranslate"><span class="pre">&quot;habitat&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;invasion&quot;</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Category of this map</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="pyroclast.io.data_repository.GeoTiffMap.data">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">data</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)"><span class="pre">ndarray</span></a></span><a class="headerlink" href="#pyroclast.io.data_repository.GeoTiffMap.data" title="Link to this definition">¶</a></dt>
+<dd><p>The raster data as a 2-D NumPy array.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><code class="docutils literal notranslate"><span class="pre">dtype=uint8</span></code> for habitat maps (0/1 presence mask),
+<code class="docutils literal notranslate"><span class="pre">dtype=float32</span></code> for the invasion map (probability values in
+<code class="docutils literal notranslate"><span class="pre">[0.0,</span> <span class="pre">1.0]</span></code>).</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)">numpy.ndarray</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyroclast.io.data_repository.GeoTiffMap.satisfies">
+<span class="sig-name descname"><span class="pre">satisfies</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">criteria</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/io/data_repository.html#GeoTiffMap.satisfies"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.io.data_repository.GeoTiffMap.satisfies" title="Link to this definition">¶</a></dt>
+<dd><p>Return whether this map matches the given query predicate.</p>
+<p>Dispatches on the concrete type of <code class="docutils literal notranslate"><span class="pre">criteria</span></code>:</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="#pyroclast.io.data_repository.HabitatCriteria" title="pyroclast.io.data_repository.HabitatCriteria"><code class="xref py py-class docutils literal notranslate"><span class="pre">HabitatCriteria</span></code></a> — returns <code class="docutils literal notranslate"><span class="pre">True</span></code> only when
+<code class="docutils literal notranslate"><span class="pre">self.kind</span> <span class="pre">==</span> <span class="pre">&quot;habitat&quot;</span></code> and either <code class="docutils literal notranslate"><span class="pre">criteria.code</span> <span class="pre">is</span> <span class="pre">None</span></code> or
+<code class="docutils literal notranslate"><span class="pre">criteria.code</span> <span class="pre">==</span> <span class="pre">self.code</span></code>.</p></li>
+<li><p><a class="reference internal" href="#pyroclast.io.data_repository.InvasionCriteria" title="pyroclast.io.data_repository.InvasionCriteria"><code class="xref py py-class docutils literal notranslate"><span class="pre">InvasionCriteria</span></code></a> — returns <code class="docutils literal notranslate"><span class="pre">True</span></code> only when
+<code class="docutils literal notranslate"><span class="pre">self.kind</span> <span class="pre">==</span> <span class="pre">&quot;invasion&quot;</span></code>.</p></li>
+<li><p>Any other <code class="docutils literal notranslate"><span class="pre">MapCriteria</span></code> subclass — returns <code class="docutils literal notranslate"><span class="pre">False</span></code>.</p></li>
+</ul>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>criteria</strong> (<a class="reference internal" href="#pyroclast.ABCs.repository.MapCriteria" title="pyroclast.ABCs.repository.MapCriteria"><em>MapCriteria</em></a>) – The query predicate to evaluate against this map.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><code class="docutils literal notranslate"><span class="pre">True</span></code> if the map matches the criteria, <code class="docutils literal notranslate"><span class="pre">False</span></code> otherwise.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)">bool</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="pyroclast.io.data_repository.FileMapStrategy">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pyroclast.io.data_repository.</span></span><span class="sig-name descname"><span class="pre">FileMapStrategy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data_dir</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/io/data_repository.html#FileMapStrategy"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.io.data_repository.FileMapStrategy" title="Link to this definition">¶</a></dt>
+<dd><p>Loads all maps from GeoTIFF files and keeps them in memory.</p>
+<p>Implements <a class="reference internal" href="#pyroclast.ABCs.repository.MapRepositoryStrategy" title="pyroclast.ABCs.repository.MapRepositoryStrategy"><code class="xref py py-class docutils literal notranslate"><span class="pre">MapRepositoryStrategy</span></code></a>.
+On first access, reads all <code class="docutils literal notranslate"><span class="pre">.tif</span></code> files under <code class="docutils literal notranslate"><span class="pre">data_dir</span></code> according to
+the layout conventions described in the module docstring and caches the
+result for the lifetime of the instance.  Subsequent calls to
+<a class="reference internal" href="#pyroclast.io.data_repository.FileMapStrategy.matching" title="pyroclast.io.data_repository.FileMapStrategy.matching"><code class="xref py py-meth docutils literal notranslate"><span class="pre">matching()</span></code></a> hit the in-memory cache with no further disk I/O.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>data_dir</strong> (<a class="reference external" href="https://docs.python.org/3/library/pathlib.html#pathlib.Path" title="(in Python v3.14)"><em>pathlib.Path</em></a>) – Root data directory.  Must contain exactly one <code class="docutils literal notranslate"><span class="pre">.tif</span></code> file at the
+top level (the invasion map) and a <code class="docutils literal notranslate"><span class="pre">habitats/</span></code> subdirectory with
+files named <code class="docutils literal notranslate"><span class="pre">cb_codice_&lt;code&gt;.tif</span></code>.</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><ul class="simple">
+<li><p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#FileNotFoundError" title="(in Python v3.14)"><strong>FileNotFoundError</strong></a> – If no <code class="docutils literal notranslate"><span class="pre">.tif</span></code> file is found at the root level.</p></li>
+<li><p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#ValueError" title="(in Python v3.14)"><strong>ValueError</strong></a> – If any habitat raster shape does not match the invasion map shape.</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="pyroclast.io.data_repository.FileMapStrategy.matching">
+<span class="sig-name descname"><span class="pre">matching</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">criteria</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/io/data_repository.html#FileMapStrategy.matching"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.io.data_repository.FileMapStrategy.matching" title="Link to this definition">¶</a></dt>
+<dd><p>Return all maps that satisfy the given criteria.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>criteria</strong> (<a class="reference internal" href="#pyroclast.ABCs.repository.MapCriteria" title="pyroclast.ABCs.repository.MapCriteria"><em>MapCriteria</em></a>) – The query predicate used to filter maps.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>All maps in the dataset for which
+<a class="reference internal" href="#pyroclast.io.data_repository.GeoTiffMap.satisfies" title="pyroclast.io.data_repository.GeoTiffMap.satisfies"><code class="xref py py-meth docutils literal notranslate"><span class="pre">GeoTiffMap.satisfies()</span></code></a> returns <code class="docutils literal notranslate"><span class="pre">True</span></code>.  May be empty.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.14)">list</a>[<a class="reference internal" href="#pyroclast.io.data_repository.GeoTiffMap" title="pyroclast.io.data_repository.GeoTiffMap">GeoTiffMap</a>]</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="pyroclast.io.data_repository.FileMapRepository">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pyroclast.io.data_repository.</span></span><span class="sig-name descname"><span class="pre">FileMapRepository</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data_dir</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'data'</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/io/data_repository.html#FileMapRepository"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.io.data_repository.FileMapRepository" title="Link to this definition">¶</a></dt>
+<dd><p>Repository that reads raster maps from a directory of GeoTIFF files.</p>
+<p>Implements <a class="reference internal" href="#pyroclast.ABCs.repository.MapRepository" title="pyroclast.ABCs.repository.MapRepository"><code class="xref py py-class docutils literal notranslate"><span class="pre">MapRepository</span></code></a>.  This is the
+primary entry-point for the data-loading layer in production use.  It
+delegates all file I/O and in-memory caching to a <a class="reference internal" href="#pyroclast.io.data_repository.FileMapStrategy" title="pyroclast.io.data_repository.FileMapStrategy"><code class="xref py py-class docutils literal notranslate"><span class="pre">FileMapStrategy</span></code></a>
+instance.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>data_dir</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em> or </em><a class="reference external" href="https://docs.python.org/3/library/pathlib.html#pathlib.Path" title="(in Python v3.14)"><em>pathlib.Path</em></a><em>, </em><em>optional</em>) – Path to the root data directory.  Defaults to <code class="docutils literal notranslate"><span class="pre">&quot;data&quot;</span></code>.  The
+directory must follow the layout described in the module docstring.</p>
+</dd>
+</dl>
+<p class="rubric">Examples</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn">pyroclast</span><span class="w"> </span><span class="kn">import</span> <span class="n">FileMapRepository</span><span class="p">,</span> <span class="n">HabitatCriteria</span><span class="p">,</span> <span class="n">InvasionCriteria</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">repo</span> <span class="o">=</span> <span class="n">FileMapRepository</span><span class="p">(</span><span class="s2">&quot;data&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">invasion</span> <span class="o">=</span> <span class="n">repo</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">InvasionCriteria</span><span class="p">())</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">habitats</span> <span class="o">=</span> <span class="n">repo</span><span class="o">.</span><span class="n">matching</span><span class="p">(</span><span class="n">HabitatCriteria</span><span class="p">())</span>
+</pre></div>
+</div>
+<dl class="py method">
+<dt class="sig sig-object py" id="pyroclast.io.data_repository.FileMapRepository.matching">
+<span class="sig-name descname"><span class="pre">matching</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">criteria</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/io/data_repository.html#FileMapRepository.matching"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.io.data_repository.FileMapRepository.matching" title="Link to this definition">¶</a></dt>
+<dd><p>Return all maps matching the given criteria.</p>
+<p>Delegates to <a class="reference internal" href="#pyroclast.io.data_repository.FileMapStrategy.matching" title="pyroclast.io.data_repository.FileMapStrategy.matching"><code class="xref py py-meth docutils literal notranslate"><span class="pre">FileMapStrategy.matching()</span></code></a>.  The full dataset is
+loaded from disk on the first call and cached for subsequent ones.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>criteria</strong> (<a class="reference internal" href="#pyroclast.ABCs.repository.MapCriteria" title="pyroclast.ABCs.repository.MapCriteria"><em>MapCriteria</em></a>) – Query predicate — typically <a class="reference internal" href="#pyroclast.io.data_repository.HabitatCriteria" title="pyroclast.io.data_repository.HabitatCriteria"><code class="xref py py-class docutils literal notranslate"><span class="pre">HabitatCriteria</span></code></a> or
+<a class="reference internal" href="#pyroclast.io.data_repository.InvasionCriteria" title="pyroclast.io.data_repository.InvasionCriteria"><code class="xref py py-class docutils literal notranslate"><span class="pre">InvasionCriteria</span></code></a>.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>All maps for which <a class="reference internal" href="#pyroclast.io.data_repository.GeoTiffMap.satisfies" title="pyroclast.io.data_repository.GeoTiffMap.satisfies"><code class="xref py py-meth docutils literal notranslate"><span class="pre">GeoTiffMap.satisfies()</span></code></a> returns <code class="docutils literal notranslate"><span class="pre">True</span></code>.
+Returns an empty sequence if no maps match.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Sequence[<a class="reference internal" href="#pyroclast.ABCs.repository.RasterMap" title="pyroclast.ABCs.repository.RasterMap">RasterMap</a>]</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+<section id="module-pyroclast.adapters.opencl_adapter">
+<span id="compute-adapter"></span><h2>Compute Adapter<a class="headerlink" href="#module-pyroclast.adapters.opencl_adapter" title="Link to this heading">¶</a></h2>
+<p>PyOpenCL Adapter — concrete GPU implementation of the IComputeAdapter Port.</p>
+<p>This module contains the infrastructure-facing side of the Ports &amp; Adapters
+architecture for the compute layer.  It is the <strong>only</strong> file in the entire
+codebase that imports <code class="docutils literal notranslate"><span class="pre">pyopencl</span></code>; all other modules depend exclusively on the
+<a class="reference internal" href="#pyroclast.ABCs.compute.IComputeAdapter" title="pyroclast.ABCs.compute.IComputeAdapter"><code class="xref py py-class docutils literal notranslate"><span class="pre">IComputeAdapter</span></code></a> interface.</p>
+<section id="id4">
+<h3>Architectural role<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">PyOpenCLAdapter</span></code> is a <em>secondary adapter</em> (driven adapter): it is called by
+the Service Layer via the <code class="docutils literal notranslate"><span class="pre">IComputeAdapter</span></code> Port and translates the
+domain-level request into low-level PyOpenCL API calls.</p>
+</section>
+<section id="device-selection-strategy">
+<h3>Device selection strategy<a class="headerlink" href="#device-selection-strategy" title="Link to this heading">¶</a></h3>
+<p>On construction the adapter scans all OpenCL platforms for a GPU device.
+The <strong>first</strong> GPU found is used.  If no GPU is available (e.g. on a CPU-only
+CI machine) the adapter falls back to <code class="docutils literal notranslate"><span class="pre">pyopencl.create_some_context</span></code> which
+picks any available device, possibly a CPU OpenCL implementation.  This makes
+the adapter usable in test environments without a dedicated GPU.</p>
+</section>
+<section id="kernel-compilation">
+<h3>Kernel compilation<a class="headerlink" href="#kernel-compilation" title="Link to this heading">¶</a></h3>
+<p>The OpenCL source is read at construction time from
+<code class="docutils literal notranslate"><span class="pre">pyroclast/kernels/preprocessing.cl</span></code> and compiled for the selected device.
+Compilation errors are surfaced as <code class="docutils literal notranslate"><span class="pre">pyopencl.RuntimeError</span></code> with the full
+compiler log.</p>
+</section>
+<section id="memory-management">
+<h3>Memory management<a class="headerlink" href="#memory-management" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>The invasion-map buffer is allocated on the device <strong>once</strong> per
+<code class="docutils literal notranslate"><span class="pre">batch_preprocess</span></code> call and reused across all habitats in the batch.</p></li>
+<li><p>Per-habitat input and output buffers are allocated, used, and released
+inside each loop iteration to minimise peak VRAM usage.</p></li>
+<li><p>All buffers are released before the method returns (both on success and on
+exception via <code class="docutils literal notranslate"><span class="pre">try/finally</span></code>).</p></li>
+</ul>
+<div class="admonition seealso">
+<p class="admonition-title">See also</p>
+<dl class="simple">
+<dt><a class="reference internal" href="#pyroclast.ABCs.compute.IComputeAdapter" title="pyroclast.ABCs.compute.IComputeAdapter"><code class="xref py py-obj docutils literal notranslate"><span class="pre">pyroclast.ABCs.compute.IComputeAdapter</span></code></a></dt><dd><p>the Port this class implements.</p>
+</dd>
+<dt><code class="xref py py-obj docutils literal notranslate"><span class="pre">pyroclast.kernels.preprocessing.cl</span></code></dt><dd><p>the OpenCL kernel source.</p>
+</dd>
+</dl>
+</div>
+</section>
+<dl class="py class">
+<dt class="sig sig-object py" id="pyroclast.adapters.opencl_adapter.PyOpenCLAdapter">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pyroclast.adapters.opencl_adapter.</span></span><span class="sig-name descname"><span class="pre">PyOpenCLAdapter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">kernel_path</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/adapters/opencl_adapter.html#PyOpenCLAdapter"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.adapters.opencl_adapter.PyOpenCLAdapter" title="Link to this definition">¶</a></dt>
+<dd><p>GPU compute adapter that implements the preprocessing pipeline via PyOpenCL.</p>
+<p>This adapter fulfils the <a class="reference internal" href="#pyroclast.ABCs.compute.IComputeAdapter" title="pyroclast.ABCs.compute.IComputeAdapter"><code class="xref py py-class docutils literal notranslate"><span class="pre">IComputeAdapter</span></code></a>
+contract using OpenCL kernels.  It is constructed once and can be reused
+across multiple <code class="docutils literal notranslate"><span class="pre">batch_preprocess</span></code> calls.</p>
+<p>Construction performs three one-time operations:</p>
+<ol class="arabic simple">
+<li><p><strong>Device discovery</strong> — selects the first GPU (or any device as a
+fallback).</p></li>
+<li><p><strong>Context and queue creation</strong> — initialises the OpenCL runtime.</p></li>
+<li><p><strong>Kernel compilation</strong> — reads <code class="docutils literal notranslate"><span class="pre">preprocessing.cl</span></code> and builds the
+<code class="docutils literal notranslate"><span class="pre">map_multiply</span></code> kernel for the selected device.</p></li>
+</ol>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>kernel_path</strong> (<a class="reference external" href="https://docs.python.org/3/library/pathlib.html#pathlib.Path" title="(in Python v3.14)"><em>pathlib.Path</em></a><em>, </em><em>optional</em>) – Absolute or relative path to the OpenCL kernel source file.
+Defaults to <code class="docutils literal notranslate"><span class="pre">pyroclast/kernels/preprocessing.cl</span></code> resolved relative
+to this module’s location.  Override in tests to use a stub kernel.</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><ul class="simple">
+<li><p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#FileNotFoundError" title="(in Python v3.14)"><strong>FileNotFoundError</strong></a> – If <code class="docutils literal notranslate"><span class="pre">kernel_path</span></code> does not exist or is not readable.</p></li>
+<li><p><strong>pyopencl.RuntimeError</strong> – If the OpenCL kernel fails to compile (the full compiler log is
+    included in the exception message).</p></li>
+<li><p><strong>pyopencl.Error</strong> – If no OpenCL platform or device is available.</p></li>
+</ul>
+</dd>
+</dl>
+<p class="rubric">Examples</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn">pyroclast.adapters.opencl_adapter</span><span class="w"> </span><span class="kn">import</span> <span class="n">PyOpenCLAdapter</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">adapter</span> <span class="o">=</span> <span class="n">PyOpenCLAdapter</span><span class="p">()</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">results</span> <span class="o">=</span> <span class="n">adapter</span><span class="o">.</span><span class="n">batch_preprocess</span><span class="p">(</span><span class="n">invasion_map</span><span class="p">,</span> <span class="n">habitats</span><span class="p">)</span>
+</pre></div>
+</div>
+<dl class="py method">
+<dt class="sig sig-object py" id="pyroclast.adapters.opencl_adapter.PyOpenCLAdapter.batch_preprocess">
+<span class="sig-name descname"><span class="pre">batch_preprocess</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">invasion_map</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">habitats</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/adapters/opencl_adapter.html#PyOpenCLAdapter.batch_preprocess"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.adapters.opencl_adapter.PyOpenCLAdapter.batch_preprocess" title="Link to this definition">¶</a></dt>
+<dd><p>Execute the Map kernel + stream compaction for a batch of habitats.</p>
+<p>The invasion probability raster is transferred to VRAM exactly once
+per call.  For each habitat the method:</p>
+<ol class="arabic simple">
+<li><p><strong>H2D</strong> — copies the habitat <code class="docutils literal notranslate"><span class="pre">uint8</span></code> raster to a read-only device
+buffer.</p></li>
+<li><p><strong>Kernel</strong> — launches <code class="docutils literal notranslate"><span class="pre">map_multiply</span></code> with a 1-D NDRange of
+<code class="docutils literal notranslate"><span class="pre">total_cells</span></code> work-items, computing
+<code class="docutils literal notranslate"><span class="pre">out[i]</span> <span class="pre">=</span> <span class="pre">p_map[i]</span> <span class="pre">*</span> <span class="pre">(float)h_map[i]</span></code> for all <code class="docutils literal notranslate"><span class="pre">i</span></code>.</p></li>
+<li><p><strong>D2H</strong> — copies the output buffer back to host RAM.</p></li>
+<li><p><strong>Stream compaction</strong> — uses <code class="docutils literal notranslate"><span class="pre">numpy</span></code> to select cells where
+<code class="docutils literal notranslate"><span class="pre">out</span> <span class="pre">&gt;</span> <span class="pre">0</span></code>, building the <code class="docutils literal notranslate"><span class="pre">p_vec</span></code> array.</p></li>
+<li><p><strong>Cleanup</strong> — releases the per-habitat device buffers.</p></li>
+</ol>
+<p>After the loop the invasion buffer is released and the method returns.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>invasion_map</strong> (<a class="reference internal" href="#pyroclast.ABCs.repository.RasterMap" title="pyroclast.ABCs.repository.RasterMap"><em>RasterMap</em></a>) – Invasion-probability raster.  <code class="docutils literal notranslate"><span class="pre">invasion_map.data</span></code> must be a 2-D
+<code class="docutils literal notranslate"><span class="pre">numpy.ndarray</span></code> with <code class="docutils literal notranslate"><span class="pre">dtype=float32</span></code>.</p></li>
+<li><p><strong>habitats</strong> (<em>Sequence</em><em>[</em><a class="reference internal" href="#pyroclast.ABCs.repository.RasterMap" title="pyroclast.ABCs.repository.RasterMap"><em>RasterMap</em></a><em>]</em>) – Habitat-presence rasters.  Each <code class="docutils literal notranslate"><span class="pre">habitat.data</span></code> must be a 2-D
+<code class="docutils literal notranslate"><span class="pre">numpy.ndarray</span></code> with <code class="docutils literal notranslate"><span class="pre">dtype=uint8</span></code> and the same shape as
+<code class="docutils literal notranslate"><span class="pre">invasion_map.data</span></code>.  An empty sequence is valid.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>One <a class="reference internal" href="#pyroclast.domain.models.CompactedHabitat" title="pyroclast.domain.models.CompactedHabitat"><code class="xref py py-class docutils literal notranslate"><span class="pre">CompactedHabitat</span></code></a> per
+element in <code class="docutils literal notranslate"><span class="pre">habitats</span></code>, in the same order.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.14)">list</a>[<a class="reference internal" href="#pyroclast.domain.models.CompactedHabitat" title="pyroclast.domain.models.CompactedHabitat">CompactedHabitat</a>]</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><ul class="simple">
+<li><p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#ValueError" title="(in Python v3.14)"><strong>ValueError</strong></a> – If the shapes of <code class="docutils literal notranslate"><span class="pre">invasion_map.data</span></code> and any <code class="docutils literal notranslate"><span class="pre">habitat.data</span></code>
+    do not match.</p></li>
+<li><p><strong>pyopencl.Error</strong> – On any OpenCL runtime error during buffer operations or kernel
+    execution.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+<section id="module-pyroclast.services.preprocessing">
+<span id="service-layer"></span><h2>Service Layer<a class="headerlink" href="#module-pyroclast.services.preprocessing" title="Link to this heading">¶</a></h2>
+<p>Preprocessing Service — orchestrates data loading, GPU computation, and caching.</p>
+<p>This module is the <em>application service layer</em> for the preprocessing phase of
+the pyroclast pipeline.  It sits between the domain/infrastructure layers and
+the entry-points (CLI, notebooks, tests).</p>
+<section id="id5">
+<h3>Architectural role<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<p>Following the Ports &amp; Adapters pattern the service function
+<a class="reference internal" href="#pyroclast.services.preprocessing.run_preprocessing_batch" title="pyroclast.services.preprocessing.run_preprocessing_batch"><code class="xref py py-func docutils literal notranslate"><span class="pre">run_preprocessing_batch()</span></code></a> depends <strong>only on abstractions</strong>:</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="#pyroclast.ABCs.repository.MapRepository" title="pyroclast.ABCs.repository.MapRepository"><code class="xref py py-class docutils literal notranslate"><span class="pre">MapRepository</span></code></a> — the data-loading Port.</p></li>
+<li><p><a class="reference internal" href="#pyroclast.ABCs.compute.IComputeAdapter" title="pyroclast.ABCs.compute.IComputeAdapter"><code class="xref py py-class docutils literal notranslate"><span class="pre">IComputeAdapter</span></code></a> — the compute Port.</p></li>
+</ul>
+<p>Concrete implementations (<code class="docutils literal notranslate"><span class="pre">FileMapRepository</span></code>, <code class="docutils literal notranslate"><span class="pre">PyOpenCLAdapter</span></code>) are
+injected by the caller, keeping the service testable with lightweight stubs.</p>
+</section>
+<section id="caching-strategy">
+<h3>Caching strategy<a class="headerlink" href="#caching-strategy" title="Link to this heading">¶</a></h3>
+<p>Results are persisted as <code class="docutils literal notranslate"><span class="pre">.npy</span></code> files in <code class="docutils literal notranslate"><span class="pre">cache_dir</span></code> using the naming
+convention <code class="docutils literal notranslate"><span class="pre">habitat_&lt;code&gt;.npy</span></code>.  Only the compacted probability vector
+<code class="docutils literal notranslate"><span class="pre">p_vec</span></code> is stored; <code class="docutils literal notranslate"><span class="pre">n_cells</span></code> is derived as <code class="docutils literal notranslate"><span class="pre">len(p_vec)</span></code> on load.</p>
+<p>On each call the service:</p>
+<ol class="arabic simple">
+<li><p>Checks which habitats already have a cache file.</p></li>
+<li><p>Loads cached habitats from disk (no GPU involved).</p></li>
+<li><p>Forwards only the <em>uncached</em> habitats to the compute adapter.</p></li>
+<li><p>Saves the new results to <code class="docutils literal notranslate"><span class="pre">cache_dir</span></code>.</p></li>
+<li><p>Returns the merged list in habitat-code-sorted order for determinism.</p></li>
+</ol>
+<p>This design ensures that repeated runs are idempotent and incremental: adding
+a new habitat to <code class="docutils literal notranslate"><span class="pre">data/habitats/</span></code> only triggers one new GPU call.</p>
+</section>
+<dl class="py function">
+<dt class="sig sig-object py" id="pyroclast.services.preprocessing.run_preprocessing_batch">
+<span class="sig-prename descclassname"><span class="pre">pyroclast.services.preprocessing.</span></span><span class="sig-name descname"><span class="pre">run_preprocessing_batch</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">repo</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">criteria</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">force_recompute</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/services/preprocessing.html#run_preprocessing_batch"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.services.preprocessing.run_preprocessing_batch" title="Link to this definition">¶</a></dt>
+<dd><p>Orchestrate the full preprocessing pipeline with intelligent caching.</p>
+<p>This is the primary entry-point for the preprocessing phase.  It loads
+raster data through the repository Port, delegates GPU computation to the
+compute Port, and manages a disk-based result cache to avoid redundant GPU
+work on subsequent runs.</p>
+<section id="pipeline-steps">
+<h3>Pipeline steps<a class="headerlink" href="#pipeline-steps" title="Link to this heading">¶</a></h3>
+<ol class="arabic simple">
+<li><p><strong>Habitat discovery</strong> — calls <code class="docutils literal notranslate"><span class="pre">repo.matching(criteria)</span></code> to obtain the
+full list of habitat <a class="reference internal" href="#pyroclast.ABCs.repository.RasterMap" title="pyroclast.ABCs.repository.RasterMap"><code class="xref py py-class docutils literal notranslate"><span class="pre">RasterMap</span></code></a>
+objects.</p></li>
+<li><p><strong>Invasion map retrieval</strong> — calls <code class="docutils literal notranslate"><span class="pre">repo.get(InvasionCriteria())</span></code> to
+obtain the invasion-probability raster (always needed, even when all
+habitats are cached, to validate shapes).</p></li>
+<li><p><strong>Cache partition</strong> — splits habitats into <em>cached</em> (a <code class="docutils literal notranslate"><span class="pre">.npy</span></code> file
+exists in <code class="docutils literal notranslate"><span class="pre">cache_dir</span></code> and <code class="docutils literal notranslate"><span class="pre">force_recompute</span></code> is <code class="docutils literal notranslate"><span class="pre">False</span></code>) and
+<em>uncached</em>.</p></li>
+<li><p><strong>GPU batch</strong> — forwards uncached habitats to
+<code class="docutils literal notranslate"><span class="pre">compute.batch_preprocess(invasion,</span> <span class="pre">uncached_habitats)</span></code>.</p></li>
+<li><p><strong>Cache write</strong> — saves each new result to <code class="docutils literal notranslate"><span class="pre">cache_dir</span></code>.</p></li>
+<li><p><strong>Merge and return</strong> — combines cached and newly computed results,
+sorted by <code class="docutils literal notranslate"><span class="pre">habitat_code</span></code> for determinism.</p></li>
+</ol>
+<dl class="field-list simple">
+<dt class="field-odd">param repo<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Repository Port used to load raster maps.  Typically a
+<code class="docutils literal notranslate"><span class="pre">FileMapRepository</span></code> in production and a stub in tests.</p>
+</dd>
+<dt class="field-even">type repo<span class="colon">:</span></dt>
+<dd class="field-even"><p>MapRepository</p>
+</dd>
+<dt class="field-odd">param compute<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Compute Port used for GPU preprocessing.  Typically a
+<code class="docutils literal notranslate"><span class="pre">PyOpenCLAdapter</span></code> in production.  Not called when all habitats are
+already cached.</p>
+</dd>
+<dt class="field-even">type compute<span class="colon">:</span></dt>
+<dd class="field-even"><p>IComputeAdapter</p>
+</dd>
+<dt class="field-odd">param criteria<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Query predicate used to select habitat maps from the repository.
+Pass <code class="docutils literal notranslate"><span class="pre">HabitatCriteria()</span></code> to process all habitats, or
+<code class="docutils literal notranslate"><span class="pre">HabitatCriteria(code=&quot;9340&quot;)</span></code> to process a specific one.</p>
+</dd>
+<dt class="field-even">type criteria<span class="colon">:</span></dt>
+<dd class="field-even"><p>MapCriteria</p>
+</dd>
+<dt class="field-odd">param cache_dir<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Directory where <code class="docutils literal notranslate"><span class="pre">.npy</span></code> cache files are stored and read from.
+The directory <strong>must already exist</strong>; this function does not create it.</p>
+</dd>
+<dt class="field-even">type cache_dir<span class="colon">:</span></dt>
+<dd class="field-even"><p>pathlib.Path</p>
+</dd>
+<dt class="field-odd">param force_recompute<span class="colon">:</span></dt>
+<dd class="field-odd"><p>If <code class="docutils literal notranslate"><span class="pre">True</span></code>, the cache is ignored and all habitats are sent to the
+compute adapter regardless of whether a cache file exists.  Results
+are still written to <code class="docutils literal notranslate"><span class="pre">cache_dir</span></code>, overwriting any previous files.
+Defaults to <code class="docutils literal notranslate"><span class="pre">False</span></code>.</p>
+</dd>
+<dt class="field-even">type force_recompute<span class="colon">:</span></dt>
+<dd class="field-even"><p>bool, optional</p>
+</dd>
+<dt class="field-odd">returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>A list of <a class="reference internal" href="#pyroclast.domain.models.CompactedHabitat" title="pyroclast.domain.models.CompactedHabitat"><code class="xref py py-class docutils literal notranslate"><span class="pre">CompactedHabitat</span></code></a> Value
+Objects, one per habitat matching <code class="docutils literal notranslate"><span class="pre">criteria</span></code>, sorted by
+<code class="docutils literal notranslate"><span class="pre">habitat_code</span></code>.  Returns an empty list if no habitats match.</p>
+</dd>
+<dt class="field-even">rtype<span class="colon">:</span></dt>
+<dd class="field-even"><p>list[CompactedHabitat]</p>
+</dd>
+<dt class="field-odd">raises ValueError<span class="colon">:</span></dt>
+<dd class="field-odd"><p>If <code class="docutils literal notranslate"><span class="pre">repo.get(InvasionCriteria())</span></code> returns zero or more than one map,
+    or if any habitat shape is inconsistent with the invasion map.</p>
+</dd>
+<dt class="field-even">raises FileNotFoundError<span class="colon">:</span></dt>
+<dd class="field-even"><p>If <code class="docutils literal notranslate"><span class="pre">cache_dir</span></code> does not exist.</p>
+</dd>
+<dt class="field-odd">raises pyopencl.Error<span class="colon">:</span></dt>
+<dd class="field-odd"><p>If a GPU error occurs inside <code class="docutils literal notranslate"><span class="pre">compute.batch_preprocess</span></code>.</p>
+</dd>
+</dl>
+<p class="rubric">Examples</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn">pyroclast</span><span class="w"> </span><span class="kn">import</span> <span class="n">FileMapRepository</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn">pyroclast.adapters</span><span class="w"> </span><span class="kn">import</span> <span class="n">PyOpenCLAdapter</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn">pyroclast.io.data_repository</span><span class="w"> </span><span class="kn">import</span> <span class="n">HabitatCriteria</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn">pyroclast.services</span><span class="w"> </span><span class="kn">import</span> <span class="n">run_preprocessing_batch</span>
+<span class="gp">&gt;&gt;&gt;</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">repo</span> <span class="o">=</span> <span class="n">FileMapRepository</span><span class="p">(</span><span class="s2">&quot;data&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">compute</span> <span class="o">=</span> <span class="n">PyOpenCLAdapter</span><span class="p">()</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">cache</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s2">&quot;cache/&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">cache</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt;</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">habitats</span> <span class="o">=</span> <span class="n">run_preprocessing_batch</span><span class="p">(</span>
+<span class="gp">... </span>    <span class="n">repo</span><span class="o">=</span><span class="n">repo</span><span class="p">,</span>
+<span class="gp">... </span>    <span class="n">compute</span><span class="o">=</span><span class="n">compute</span><span class="p">,</span>
+<span class="gp">... </span>    <span class="n">criteria</span><span class="o">=</span><span class="n">HabitatCriteria</span><span class="p">(),</span>
+<span class="gp">... </span>    <span class="n">cache_dir</span><span class="o">=</span><span class="n">cache</span><span class="p">,</span>
+<span class="gp">... </span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="k">for</span> <span class="n">h</span> <span class="ow">in</span> <span class="n">habitats</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="nb">print</span><span class="p">(</span><span class="n">h</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>repo</strong> (<a class="reference internal" href="#pyroclast.ABCs.repository.MapRepository" title="pyroclast.ABCs.repository.MapRepository"><em>MapRepository</em></a>)</p></li>
+<li><p><strong>compute</strong> (<a class="reference internal" href="#pyroclast.ABCs.compute.IComputeAdapter" title="pyroclast.ABCs.compute.IComputeAdapter"><em>IComputeAdapter</em></a>)</p></li>
+<li><p><strong>criteria</strong> (<a class="reference internal" href="#pyroclast.ABCs.repository.MapCriteria" title="pyroclast.ABCs.repository.MapCriteria"><em>MapCriteria</em></a>)</p></li>
+<li><p><strong>cache_dir</strong> (<a class="reference external" href="https://docs.python.org/3/library/pathlib.html#pathlib.Path" title="(in Python v3.14)"><em>Path</em></a>)</p></li>
+<li><p><strong>force_recompute</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><em>bool</em></a>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.14)">list</a>[<a class="reference internal" href="#pyroclast.domain.models.CompactedHabitat" title="pyroclast.domain.models.CompactedHabitat"><em>CompactedHabitat</em></a>]</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+</section>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="index.html">pyroclast</a></h1>
+
+
+
+
+
+
+
+
+
+<search id="searchbox" style="display: none" role="search">
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Search"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script><h3>Navigation</h3>
+<ul class="current">
+<li class="toctree-l1 current"><a class="current reference internal" href="#">API Reference</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#module-pyroclast.domain.models">Domain</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#module-pyroclast.ABCs.repository">Abstract Interfaces (Ports)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#module-pyroclast.io.data_repository">I/O Adapter</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#module-pyroclast.adapters.opencl_adapter">Compute Adapter</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#module-pyroclast.services.preprocessing">Service Layer</a></li>
+</ul>
+</li>
+</ul>
+<ul class="current">
+<li class="toctree-l1 current"><a class="current reference internal" href="#">API Reference</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="index.html">Documentation overview</a><ul>
+      <li>Previous: <a href="index.html" title="previous chapter">pyroclast</a></li>
+  </ul></li>
+</ul>
+</div>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &#169;.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 9.1.0</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 1.0.0</a>
+      
+      |
+      <a href="_sources/api.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>
