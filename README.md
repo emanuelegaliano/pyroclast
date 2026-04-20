@@ -4,6 +4,11 @@
 
 GPU-accelerated Monte Carlo simulation to estimate the probability of critical vegetation loss from lava flow invasion, using per-cell invasion probability maps and habitat masks.
 
+## Requirements
+
+- Python 3.10+
+- OpenCL 1.2 or later
+
 ## Installation
 
 ```bash

@@ -6,5 +6,6 @@ Contains concrete implementations of the compute Ports defined in
 """
 
 from .opencl_adapter import PyOpenCLAdapter
+from .opencl_mc_adapter import PyOpenCLMonteCarloAdapter
 
-__all__ = ["PyOpenCLAdapter"]
+__all__ = ["PyOpenCLAdapter", "PyOpenCLMonteCarloAdapter"]

@@ -12,6 +12,7 @@
     <script src="_static/documentation_options.js?v=01f34227"></script>
     <script src="_static/doctools.js?v=fd6eb6e6"></script>
     <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-mml-chtml.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
     <link rel="prev" title="pyroclast" href="index.html" />
@@ -176,6 +177,59 @@ is zero to avoid division by zero.</p>
 </ul>
 </dd>
 </dl>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="pyroclast.domain.models.MonteCarloConfig">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pyroclast.domain.models.</span></span><span class="sig-name descname"><span class="pre">MonteCarloConfig</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">n_runs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">threshold</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/domain/models.html#MonteCarloConfig"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.domain.models.MonteCarloConfig" title="Link to this definition">¶</a></dt>
+<dd><p>Immutable Value Object carrying the parameters for a Monte Carlo run.</p>
+<p>Groups the three scalar parameters that govern a single Monte Carlo
+experiment: the number of independent runs, the critical invasion
+threshold, and the seed for reproducible random number generation.</p>
+<p>Being a frozen dataclass, instances are safe to share across threads
+and to use as dictionary keys.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>n_runs</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><em>int</em></a>) – Number of independent Monte Carlo runs <span class="math notranslate nohighlight">\(R\)</span>.  Must be positive.
+Values in the range 100 000–500 000 are typical for convergence.</p></li>
+<li><p><strong>threshold</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><em>float</em></a>) – Critical invaded fraction <span class="math notranslate nohighlight">\(\theta \in [0, 1]\)</span>.  A run is
+counted as a <em>destruction event</em> when the fraction of invaded habitat
+cells <strong>strictly exceeds</strong> this value.</p></li>
+<li><p><strong>seed</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><em>int</em></a>) – Deterministic seed for the device-side RNG.  Must satisfy
+<span class="math notranslate nohighlight">\(0 \leq \text{seed} &lt; 2^{32}\)</span> so that it fits in an OpenCL
+<code class="docutils literal notranslate"><span class="pre">uint</span></code> argument.  The same <code class="docutils literal notranslate"><span class="pre">(seed,</span> <span class="pre">n_runs,</span> <span class="pre">threshold)</span></code> triple
+always produces the same result.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#ValueError" title="(in Python v3.14)"><strong>ValueError</strong></a> – If <code class="docutils literal notranslate"><span class="pre">n_runs</span> <span class="pre">&lt;=</span> <span class="pre">0</span></code>, <code class="docutils literal notranslate"><span class="pre">threshold</span></code> is outside <code class="docutils literal notranslate"><span class="pre">[0.0,</span> <span class="pre">1.0]</span></code>, or
+    <code class="docutils literal notranslate"><span class="pre">seed</span></code> is outside <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">2³²−1]</span></code>.</p>
+</dd>
+</dl>
+<p class="rubric">Examples</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">cfg</span> <span class="o">=</span> <span class="n">MonteCarloConfig</span><span class="p">(</span><span class="n">n_runs</span><span class="o">=</span><span class="mi">100_000</span><span class="p">,</span> <span class="n">threshold</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">42</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">cfg</span><span class="o">.</span><span class="n">n_runs</span>
+<span class="go">100000</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">cfg</span><span class="o">.</span><span class="n">threshold</span>
+<span class="go">0.5</span>
+</pre></div>
+</div>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="pyroclast.domain.models.MonteCarloConfig.n_runs">
+<span class="sig-name descname"><span class="pre">n_runs</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><a class="headerlink" href="#pyroclast.domain.models.MonteCarloConfig.n_runs" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="pyroclast.domain.models.MonteCarloConfig.threshold">
+<span class="sig-name descname"><span class="pre">threshold</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><a class="headerlink" href="#pyroclast.domain.models.MonteCarloConfig.threshold" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="pyroclast.domain.models.MonteCarloConfig.seed">
+<span class="sig-name descname"><span class="pre">seed</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><a class="headerlink" href="#pyroclast.domain.models.MonteCarloConfig.seed" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
 </dd></dl>
 
 </section>

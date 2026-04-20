@@ -187,6 +187,67 @@
             <span class="sa">f</span><span class="s2">&quot;mean_p=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">mean_probability</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">)&quot;</span>
         <span class="p">)</span></div>
 
+
+
+<div class="viewcode-block" id="MonteCarloConfig">
+<a class="viewcode-back" href="../../../api.html#pyroclast.domain.models.MonteCarloConfig">[docs]</a>
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">MonteCarloConfig</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Immutable Value Object carrying the parameters for a Monte Carlo run.</span>
+
+<span class="sd">    Groups the three scalar parameters that govern a single Monte Carlo</span>
+<span class="sd">    experiment: the number of independent runs, the critical invasion</span>
+<span class="sd">    threshold, and the seed for reproducible random number generation.</span>
+
+<span class="sd">    Being a frozen dataclass, instances are safe to share across threads</span>
+<span class="sd">    and to use as dictionary keys.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    n_runs : int</span>
+<span class="sd">        Number of independent Monte Carlo runs :math:`R`.  Must be positive.</span>
+<span class="sd">        Values in the range 100 000–500 000 are typical for convergence.</span>
+<span class="sd">    threshold : float</span>
+<span class="sd">        Critical invaded fraction :math:`\\theta \\in [0, 1]`.  A run is</span>
+<span class="sd">        counted as a *destruction event* when the fraction of invaded habitat</span>
+<span class="sd">        cells **strictly exceeds** this value.</span>
+<span class="sd">    seed : int</span>
+<span class="sd">        Deterministic seed for the device-side RNG.  Must satisfy</span>
+<span class="sd">        :math:`0 \\leq \\text{seed} &lt; 2^{32}` so that it fits in an OpenCL</span>
+<span class="sd">        ``uint`` argument.  The same ``(seed, n_runs, threshold)`` triple</span>
+<span class="sd">        always produces the same result.</span>
+
+<span class="sd">    Raises</span>
+<span class="sd">    ------</span>
+<span class="sd">    ValueError</span>
+<span class="sd">        If ``n_runs &lt;= 0``, ``threshold`` is outside ``[0.0, 1.0]``, or</span>
+<span class="sd">        ``seed`` is outside ``[0, 2³²−1]``.</span>
+
+<span class="sd">    Examples</span>
+<span class="sd">    --------</span>
+<span class="sd">    &gt;&gt;&gt; cfg = MonteCarloConfig(n_runs=100_000, threshold=0.5, seed=42)</span>
+<span class="sd">    &gt;&gt;&gt; cfg.n_runs</span>
+<span class="sd">    100000</span>
+<span class="sd">    &gt;&gt;&gt; cfg.threshold</span>
+<span class="sd">    0.5</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">n_runs</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">threshold</span><span class="p">:</span> <span class="nb">float</span>
+    <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_runs</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;n_runs must be &gt; 0, got </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_runs</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="mf">0.0</span> <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">threshold</span> <span class="o">&lt;=</span> <span class="mf">1.0</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;threshold must be in [0.0, 1.0], got </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">threshold</span><span class="si">}</span><span class="s2">.&quot;</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="mi">0</span> <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">seed</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="o">**</span><span class="mi">32</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;seed must be in [0, 2³²−1], got </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">seed</span><span class="si">}</span><span class="s2">.&quot;</span>
+            <span class="p">)</span></div>
+
 </pre></div>
 
           </div>

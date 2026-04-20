@@ -10,7 +10,10 @@ from pyroclast import (
     InvasionCriteria,
     PyOpenCLAdapter,
 )
+from pyroclast.adapters.opencl_mc_adapter import PyOpenCLMonteCarloAdapter
+from pyroclast.domain.models import MonteCarloConfig
 from pyroclast.services import run_preprocessing_batch
+from pyroclast.services.monte_carlo import run_monte_carlo_batch
 from benchmarks.bench_kernels import _print_result, bench_map_multiply
 
 
@@ -98,8 +101,25 @@ def main() -> None:
         above_mean = int(np.sum(r.p_vec > r.mean_probability))
         print(f"    cells above mean  : {above_mean:,}")
 
-    # ── 6. Kernel benchmark ──────────────────────────────────────
-    section("6. Kernel benchmark — map_multiply")
+    # ── 6. Monte Carlo simulation ────────────────────────────────
+    section("6. Monte Carlo — destruction probability per habitat")
+    mc_adapter = PyOpenCLMonteCarloAdapter()
+    mc_config = MonteCarloConfig(
+        n_runs=int(os.getenv("MC_RUNS", "1000000000")),
+        threshold=float(os.getenv("MC_THRESHOLD", "0.005")),
+        seed=int(os.getenv("MC_SEED", "42")),
+    )
+    n_batches = int(os.getenv("MC_BATCHES", "10"))
+    print(f"Config: R={mc_config.n_runs:,}  θ={mc_config.threshold}  seed={mc_config.seed}  batches={n_batches}")
+
+    for habitat in compacted:
+        def _progress(i, total, p, code=habitat.habitat_code):
+            print(f"  [{code}]  {(i + 1) * 100 // total:3d}%  p≈{p:.4f}", end="\r", flush=True)
+        prob = mc_adapter.run_batched(habitat, mc_config, n_batches, callback=_progress)
+        print(f"  [{habitat.habitat_code}]  P(invaded_fraction > {mc_config.threshold}) = {prob:.4f}    ")
+
+    # ── 7. Kernel benchmark ──────────────────────────────────────
+    section("7. Kernel benchmark — map_multiply")
     n_rows, n_cols = invasion.data.shape
     bench = bench_map_multiply(shape=(n_rows, n_cols), n_warmup=5, n_runs=20)
     _print_result(bench)

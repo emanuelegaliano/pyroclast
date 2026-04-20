@@ -151,3 +151,61 @@ class CompactedHabitat:
             f"n_cells={self.n_cells}, "
             f"mean_p={self.mean_probability:.4f})"
         )
+
+
+@dataclass(frozen=True)
+class MonteCarloConfig:
+    """Immutable Value Object carrying the parameters for a Monte Carlo run.
+
+    Groups the three scalar parameters that govern a single Monte Carlo
+    experiment: the number of independent runs, the critical invasion
+    threshold, and the seed for reproducible random number generation.
+
+    Being a frozen dataclass, instances are safe to share across threads
+    and to use as dictionary keys.
+
+    Parameters
+    ----------
+    n_runs : int
+        Number of independent Monte Carlo runs :math:`R`.  Must be positive.
+        Values in the range 100 000–500 000 are typical for convergence.
+    threshold : float
+        Critical invaded fraction :math:`\\theta \\in [0, 1]`.  A run is
+        counted as a *destruction event* when the fraction of invaded habitat
+        cells **strictly exceeds** this value.
+    seed : int
+        Deterministic seed for the device-side RNG.  Must satisfy
+        :math:`0 \\leq \\text{seed} < 2^{32}` so that it fits in an OpenCL
+        ``uint`` argument.  The same ``(seed, n_runs, threshold)`` triple
+        always produces the same result.
+
+    Raises
+    ------
+    ValueError
+        If ``n_runs <= 0``, ``threshold`` is outside ``[0.0, 1.0]``, or
+        ``seed`` is outside ``[0, 2³²−1]``.
+
+    Examples
+    --------
+    >>> cfg = MonteCarloConfig(n_runs=100_000, threshold=0.5, seed=42)
+    >>> cfg.n_runs
+    100000
+    >>> cfg.threshold
+    0.5
+    """
+
+    n_runs: int
+    threshold: float
+    seed: int
+
+    def __post_init__(self) -> None:
+        if self.n_runs <= 0:
+            raise ValueError(f"n_runs must be > 0, got {self.n_runs}.")
+        if not (0.0 <= self.threshold <= 1.0):
+            raise ValueError(
+                f"threshold must be in [0.0, 1.0], got {self.threshold}."
+            )
+        if not (0 <= self.seed < 2**32):
+            raise ValueError(
+                f"seed must be in [0, 2³²−1], got {self.seed}."
+            )
