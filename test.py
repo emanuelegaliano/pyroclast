@@ -14,7 +14,6 @@ from pyroclast.adapters.opencl_mc_adapter import PyOpenCLMonteCarloAdapter
 from pyroclast.domain.models import MonteCarloConfig
 from pyroclast.services import run_preprocessing_batch
 from pyroclast.services.monte_carlo import run_monte_carlo_batch
-from benchmarks.bench_kernels import _print_result, bench_map_multiply
 
 
 def section(title: str) -> None:
@@ -51,7 +50,7 @@ def main() -> None:
 
     # ── 2. GPU adapter (direct) ──────────────────────────────────
     section("2. PyOpenCLAdapter — direct batch_preprocess call")
-    adapter = PyOpenCLAdapter()
+    adapter = PyOpenCLAdapter(profiling=True)
     print(f"Device: {adapter._ctx.devices[0].name}")
 
     results = adapter.batch_preprocess(invasion, habitats)
@@ -103,7 +102,7 @@ def main() -> None:
 
     # ── 6. Monte Carlo simulation ────────────────────────────────
     section("6. Monte Carlo — destruction probability per habitat")
-    mc_adapter = PyOpenCLMonteCarloAdapter()
+    mc_adapter = PyOpenCLMonteCarloAdapter(profiling=True)
     mc_config = MonteCarloConfig(
         n_runs=int(os.getenv("MC_RUNS", "1000000000")),
         threshold=float(os.getenv("MC_THRESHOLD", "0.005")),
@@ -119,10 +118,22 @@ def main() -> None:
         print(f"  [{habitat.habitat_code}]  P(invaded_fraction > {mc_config.threshold}) = {prob:.4f}    ")
 
     # ── 7. Kernel benchmark ──────────────────────────────────────
-    section("7. Kernel benchmark — map_multiply")
-    n_rows, n_cols = invasion.data.shape
-    bench = bench_map_multiply(shape=(n_rows, n_cols), n_warmup=5, n_runs=20)
-    _print_result(bench)
+    section("7. Kernel benchmark")
+    preprocess_bench = adapter.benchmark()
+    print(f"  kernel      : {preprocess_bench.kernel_name}")
+    print(f"  shape       : {preprocess_bench.shape[0]} x {preprocess_bench.shape[1]}  ({preprocess_bench.n_cells:,} cells)")
+    print(f"  launches    : {preprocess_bench.n_runs}")
+    print(f"  time (mean) : {preprocess_bench.mean_ms:.3f} ms")
+    print(f"  time (min)  : {preprocess_bench.min_ms:.3f} ms")
+    print(f"  bandwidth   : {preprocess_bench.bandwidth_gbs:.2f} GB/s", end="\n\n")
+
+    mc_bench = mc_adapter.benchmark()
+    print(f"  kernel      : {mc_bench.kernel_name}")
+    print(f"  shape       : {mc_bench.shape[0]} x {mc_bench.shape[1]}  ({mc_bench.n_cells:,} cells)")
+    print(f"  launches    : {mc_bench.n_runs}")
+    print(f"  time (mean) : {mc_bench.mean_ms:.3f} ms")
+    print(f"  time (min)  : {mc_bench.min_ms:.3f} ms")
+    print(f"  bandwidth   : {mc_bench.bandwidth_gbs:.2f} GB/s")
 
 
 if __name__ == "__main__":

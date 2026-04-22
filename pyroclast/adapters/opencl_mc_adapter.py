@@ -63,7 +63,7 @@ import numpy as np
 import pyopencl as cl  # type: ignore[import-untyped]
 
 from pyroclast.ABCs.monte_carlo import IMonteCarloAdapter
-from pyroclast.domain.models import CompactedHabitat, MonteCarloConfig
+from pyroclast.domain.models import BenchResult, CompactedHabitat, MonteCarloConfig
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +156,11 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
     >>> prob = adapter.run(habitat, config)
     """
 
-    def __init__(self, kernel_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        kernel_path: Path | None = None,
+        profiling: bool = False,
+    ) -> None:
         if kernel_path is None:
             kernel_path = (
                 Path(__file__).parent.parent / "kernels" / "monte_carlo.cl"
@@ -168,7 +172,16 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
             )
 
         self._ctx: cl.Context = _build_context()
-        self._queue: cl.CommandQueue = cl.CommandQueue(self._ctx)
+        self._profiling = profiling
+        queue_props = (
+            cl.command_queue_properties.PROFILING_ENABLE if profiling else 0
+        )
+        self._queue: cl.CommandQueue = cl.CommandQueue(
+            self._ctx, properties=queue_props
+        )
+        # each entry: (elapsed_ms, bytes_transferred) for one kernel launch
+        self._kernel_launches: list[tuple[float, int]] = []
+        self._last_n_cells: int = 0
 
         kernel_source = kernel_path.read_text(encoding="utf-8")
         try:
@@ -237,7 +250,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
                 hostbuf=count_host,
             )
 
-            self._kernel(
+            event = self._kernel(
                 self._queue,
                 (padded,),
                 (wg,),
@@ -251,6 +264,13 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
 
             cl.enqueue_copy(self._queue, count_host, count_buf)
             self._queue.finish()
+
+            if self._profiling:
+                elapsed_ms = (event.profile.end - event.profile.start) * 1e-6
+                # each of config.n_runs work-items reads all habitat.n_cells floats
+                bytes_transferred = 4 * habitat.n_cells * config.n_runs
+                self._last_n_cells = habitat.n_cells
+                self._kernel_launches.append((elapsed_ms, bytes_transferred))
         finally:
             if p_buf is not None:
                 p_buf.release()
@@ -335,7 +355,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
                     hostbuf=count_host,
                 )
                 try:
-                    self._kernel(
+                    event = self._kernel(
                         self._queue,
                         (padded_batch,),
                         (wg,),
@@ -348,6 +368,12 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
                     )
                     cl.enqueue_copy(self._queue, count_host, count_buf)
                     self._queue.finish()
+
+                    if self._profiling:
+                        elapsed_ms = (event.profile.end - event.profile.start) * 1e-6
+                        bytes_transferred = 4 * habitat.n_cells * batch_size
+                        self._last_n_cells = habitat.n_cells
+                        self._kernel_launches.append((elapsed_ms, bytes_transferred))
                 finally:
                     count_buf.release()
 
@@ -372,3 +398,41 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
             config.threshold,
         )
         return prob
+
+    def reset_profile(self) -> None:
+        """Clear accumulated kernel timing data."""
+        self._kernel_launches.clear()
+        self._last_n_cells = 0
+
+    def benchmark(self) -> BenchResult:
+        """Return timing and bandwidth statistics from real kernel executions.
+
+        Raises
+        ------
+        NotImplementedError
+            If the adapter was constructed without ``profiling=True``.
+        ValueError
+            If no kernel launches have been recorded yet.
+        """
+        if not self._profiling:
+            raise NotImplementedError(
+                "Profiling is disabled. Construct with profiling=True."
+            )
+        if not self._kernel_launches:
+            raise ValueError(
+                "No kernel executions recorded yet. "
+                "Call run() or run_batched() at least once before benchmark()."
+            )
+        times_ms = [t for t, _ in self._kernel_launches]
+        total_bytes = sum(b for _, b in self._kernel_launches)
+        total_time_s = sum(times_ms) * 1e-3
+        bandwidth_gbs = total_bytes / total_time_s / 1e9
+        return BenchResult(
+            kernel_name=_KERNEL_NAME,
+            shape=(self._last_n_cells, 1),
+            n_cells=self._last_n_cells,
+            n_runs=len(times_ms),
+            mean_ms=float(np.mean(times_ms)),
+            min_ms=float(np.min(times_ms)),
+            bandwidth_gbs=bandwidth_gbs,
+        )

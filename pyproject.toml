@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyroclast"
-version = "0.2.0"
+version = "0.3.0"
 description = "Monte Carlo GPU simulation of lava flow impact on vegetation habitats"
 readme = "README.md"
 license = { text = "MIT" }

@@ -53,7 +53,7 @@ import pyopencl as cl  # type: ignore[import-untyped]
 
 from pyroclast.ABCs.compute import IComputeAdapter
 from pyroclast.ABCs.repository import RasterMap
-from pyroclast.domain.models import CompactedHabitat
+from pyroclast.domain.models import BenchResult, CompactedHabitat
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +149,11 @@ class PyOpenCLAdapter(IComputeAdapter):
     >>> results = adapter.batch_preprocess(invasion_map, habitats)
     """
 
-    def __init__(self, kernel_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        kernel_path: Path | None = None,
+        profiling: bool = False,
+    ) -> None:
         if kernel_path is None:
             kernel_path = (
                 Path(__file__).parent.parent / "kernels" / "preprocessing.cl"
@@ -161,7 +165,16 @@ class PyOpenCLAdapter(IComputeAdapter):
             )
 
         self._ctx: cl.Context = _build_context()
-        self._queue: cl.CommandQueue = cl.CommandQueue(self._ctx)
+        self._profiling = profiling
+        queue_props = (
+            cl.command_queue_properties.PROFILING_ENABLE if profiling else 0
+        )
+        self._queue: cl.CommandQueue = cl.CommandQueue(
+            self._ctx, properties=queue_props
+        )
+        self._kernel_times_ms: list[float] = []
+        self._last_n_cells: int = 0
+        self._last_shape: tuple[int, int] = (0, 0)
 
         kernel_source = kernel_path.read_text(encoding="utf-8")
         try:
@@ -234,6 +247,8 @@ class PyOpenCLAdapter(IComputeAdapter):
             invasion_map.data.ravel(), dtype=np.float32
         )
         total_cells = p_flat.size
+        self._last_n_cells = total_cells
+        self._last_shape = (invasion_map.data.shape[0], invasion_map.data.shape[1])
         mf = cl.mem_flags
 
         p_buf: cl.Buffer = cl.Buffer(
@@ -275,7 +290,7 @@ class PyOpenCLAdapter(IComputeAdapter):
                         size=out_flat.nbytes,
                     )
 
-                    self._kernel(
+                    event = self._kernel(
                         self._queue,
                         (total_cells,),
                         None,
@@ -287,6 +302,12 @@ class PyOpenCLAdapter(IComputeAdapter):
 
                     cl.enqueue_copy(self._queue, out_flat, out_buf)
                     self._queue.finish()
+
+                    if self._profiling:
+                        elapsed_ms = (
+                            event.profile.end - event.profile.start
+                        ) * 1e-6
+                        self._kernel_times_ms.append(elapsed_ms)
                 finally:
                     if h_buf is not None:
                         h_buf.release()
@@ -314,3 +335,46 @@ class PyOpenCLAdapter(IComputeAdapter):
             p_buf.release()
 
         return results
+
+    def reset_profile(self) -> None:
+        """Clear accumulated kernel timing data."""
+        self._kernel_times_ms.clear()
+
+    def benchmark(self) -> BenchResult:
+        """Return timing and bandwidth statistics from real kernel executions.
+
+        Raises
+        ------
+        NotImplementedError
+            If the adapter was constructed without ``profiling=True``.
+        ValueError
+            If no kernel launches have been recorded yet.
+        """
+        if not self._profiling:
+            raise NotImplementedError(
+                "Profiling is disabled. Construct with profiling=True."
+            )
+        if not self._kernel_times_ms:
+            raise ValueError(
+                "No kernel executions recorded yet. "
+                "Call batch_preprocess() at least once before benchmark()."
+            )
+        # reads: 4 B (float32 p_map) + 1 B (uint8 h_map); writes: 4 B (float32 out)
+        _BYTES_PER_CELL = 9
+        times = self._kernel_times_ms
+        mean_ms = float(np.mean(times))
+        min_ms = float(np.min(times))
+        # n_cells is the same for every launch (all habitats share the invasion map shape)
+        # infer it from the last recorded run via bandwidth formula inversion is not possible,
+        # so we store it alongside the times
+        n_cells = self._last_n_cells
+        bandwidth_gbs = (_BYTES_PER_CELL * n_cells) / (mean_ms * 1e-3) / 1e9
+        return BenchResult(
+            kernel_name=_KERNEL_NAME,
+            shape=self._last_shape,
+            n_cells=n_cells,
+            n_runs=len(times),
+            mean_ms=mean_ms,
+            min_ms=min_ms,
+            bandwidth_gbs=bandwidth_gbs,
+        )

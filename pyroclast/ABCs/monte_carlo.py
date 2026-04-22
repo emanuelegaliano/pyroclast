@@ -26,7 +26,7 @@ pyroclast.domain.models.MonteCarloConfig : simulation parameters.
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
-from pyroclast.domain.models import CompactedHabitat, MonteCarloConfig
+from pyroclast.domain.models import BenchResult, CompactedHabitat, MonteCarloConfig
 
 
 class IMonteCarloAdapter(ABC):
@@ -132,3 +132,23 @@ class IMonteCarloAdapter(ABC):
         float
             Estimated probability in :math:`[0.0, 1.0]`.
         """
+
+    def benchmark(self) -> BenchResult:
+        """Return timing and bandwidth statistics from real kernel executions.
+
+        Statistics are collected during actual ``run`` or ``run_batched``
+        calls when the adapter is constructed with ``profiling=True``.
+
+        Returns
+        -------
+        BenchResult
+            Timing and bandwidth statistics derived from real kernel launches.
+
+        Raises
+        ------
+        NotImplementedError
+            If the concrete adapter does not support profiling.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support benchmark()."
+        )

@@ -180,6 +180,61 @@ is zero to avoid division by zero.</p>
 </dd></dl>
 
 <dl class="py class">
+<dt class="sig sig-object py" id="pyroclast.domain.models.BenchResult">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pyroclast.domain.models.</span></span><span class="sig-name descname"><span class="pre">BenchResult</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">kernel_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_cells</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_runs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mean_ms</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min_ms</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bandwidth_gbs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/domain/models.html#BenchResult"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.domain.models.BenchResult" title="Link to this definition">¶</a></dt>
+<dd><p>Immutable Value Object holding the results of a kernel benchmark run.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>kernel_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a>) – Name of the OpenCL kernel that was benchmarked.</p></li>
+<li><p><strong>shape</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.14)"><em>tuple</em></a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><em>int</em></a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><em>int</em></a><em>]</em>) – 2-D grid shape used for the synthetic benchmark data.</p></li>
+<li><p><strong>n_cells</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><em>int</em></a>) – Total number of cells (<code class="docutils literal notranslate"><span class="pre">shape[0]</span> <span class="pre">*</span> <span class="pre">shape[1]</span></code>).</p></li>
+<li><p><strong>n_runs</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><em>int</em></a>) – Number of timed kernel launches (excluding warmup).</p></li>
+<li><p><strong>mean_ms</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><em>float</em></a>) – Mean kernel execution time in milliseconds.</p></li>
+<li><p><strong>min_ms</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><em>float</em></a>) – Minimum kernel execution time in milliseconds.</p></li>
+<li><p><strong>bandwidth_gbs</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><em>float</em></a>) – Effective memory bandwidth in GB/s, computed from the adapter’s
+bytes-per-cell model and the mean execution time.</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="pyroclast.domain.models.BenchResult.kernel_name">
+<span class="sig-name descname"><span class="pre">kernel_name</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span><a class="headerlink" href="#pyroclast.domain.models.BenchResult.kernel_name" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="pyroclast.domain.models.BenchResult.shape">
+<span class="sig-name descname"><span class="pre">shape</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.14)"><span class="pre">tuple</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a><span class="p"><span class="pre">]</span></span></span><a class="headerlink" href="#pyroclast.domain.models.BenchResult.shape" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="pyroclast.domain.models.BenchResult.n_cells">
+<span class="sig-name descname"><span class="pre">n_cells</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><a class="headerlink" href="#pyroclast.domain.models.BenchResult.n_cells" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="pyroclast.domain.models.BenchResult.n_runs">
+<span class="sig-name descname"><span class="pre">n_runs</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><a class="headerlink" href="#pyroclast.domain.models.BenchResult.n_runs" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="pyroclast.domain.models.BenchResult.mean_ms">
+<span class="sig-name descname"><span class="pre">mean_ms</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><a class="headerlink" href="#pyroclast.domain.models.BenchResult.mean_ms" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="pyroclast.domain.models.BenchResult.min_ms">
+<span class="sig-name descname"><span class="pre">min_ms</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><a class="headerlink" href="#pyroclast.domain.models.BenchResult.min_ms" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="pyroclast.domain.models.BenchResult.bandwidth_gbs">
+<span class="sig-name descname"><span class="pre">bandwidth_gbs</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><a class="headerlink" href="#pyroclast.domain.models.BenchResult.bandwidth_gbs" title="Link to this definition">¶</a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
 <dt class="sig sig-object py" id="pyroclast.domain.models.MonteCarloConfig">
 <span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pyroclast.domain.models.</span></span><span class="sig-name descname"><span class="pre">MonteCarloConfig</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">n_runs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">threshold</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/domain/models.html#MonteCarloConfig"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.domain.models.MonteCarloConfig" title="Link to this definition">¶</a></dt>
 <dd><p>Immutable Value Object carrying the parameters for a Monte Carlo run.</p>
@@ -422,6 +477,27 @@ and an empty <code class="docutils literal notranslate"><span class="pre">p_vec<
 <li><p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#RuntimeError" title="(in Python v3.14)"><strong>RuntimeError</strong></a> – If device initialisation or kernel compilation fails (raised by
     the concrete implementation).</p></li>
 </ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyroclast.ABCs.compute.IComputeAdapter.benchmark">
+<span class="sig-name descname"><span class="pre">benchmark</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/ABCs/compute.html#IComputeAdapter.benchmark"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.ABCs.compute.IComputeAdapter.benchmark" title="Link to this definition">¶</a></dt>
+<dd><p>Return timing and bandwidth statistics from real kernel executions.</p>
+<p>Statistics are collected during actual <code class="docutils literal notranslate"><span class="pre">batch_preprocess</span></code> calls when
+the adapter is constructed with <code class="docutils literal notranslate"><span class="pre">profiling=True</span></code>.  Calling this
+method without having run at least one <code class="docutils literal notranslate"><span class="pre">batch_preprocess</span></code> first, or
+without enabling profiling, raises <code class="docutils literal notranslate"><span class="pre">NotImplementedError</span></code>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Timing and bandwidth statistics derived from real kernel launches.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><a class="reference internal" href="#pyroclast.domain.models.BenchResult" title="pyroclast.domain.models.BenchResult">BenchResult</a></p>
+</dd>
+<dt class="field-odd">Raises<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#NotImplementedError" title="(in Python v3.14)"><strong>NotImplementedError</strong></a> – If the concrete adapter does not support profiling.</p>
 </dd>
 </dl>
 </dd></dl>
@@ -752,7 +828,7 @@ exception via <code class="docutils literal notranslate"><span class="pre">try/f
 </section>
 <dl class="py class">
 <dt class="sig sig-object py" id="pyroclast.adapters.opencl_adapter.PyOpenCLAdapter">
-<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pyroclast.adapters.opencl_adapter.</span></span><span class="sig-name descname"><span class="pre">PyOpenCLAdapter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">kernel_path</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/adapters/opencl_adapter.html#PyOpenCLAdapter"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.adapters.opencl_adapter.PyOpenCLAdapter" title="Link to this definition">¶</a></dt>
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">pyroclast.adapters.opencl_adapter.</span></span><span class="sig-name descname"><span class="pre">PyOpenCLAdapter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">kernel_path</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">profiling</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/adapters/opencl_adapter.html#PyOpenCLAdapter"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.adapters.opencl_adapter.PyOpenCLAdapter" title="Link to this definition">¶</a></dt>
 <dd><p>GPU compute adapter that implements the preprocessing pipeline via PyOpenCL.</p>
 <p>This adapter fulfils the <a class="reference internal" href="#pyroclast.ABCs.compute.IComputeAdapter" title="pyroclast.ABCs.compute.IComputeAdapter"><code class="xref py py-class docutils literal notranslate"><span class="pre">IComputeAdapter</span></code></a>
 contract using OpenCL kernels.  It is constructed once and can be reused
@@ -767,9 +843,12 @@ fallback).</p></li>
 </ol>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><p><strong>kernel_path</strong> (<a class="reference external" href="https://docs.python.org/3/library/pathlib.html#pathlib.Path" title="(in Python v3.14)"><em>pathlib.Path</em></a><em>, </em><em>optional</em>) – Absolute or relative path to the OpenCL kernel source file.
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>kernel_path</strong> (<a class="reference external" href="https://docs.python.org/3/library/pathlib.html#pathlib.Path" title="(in Python v3.14)"><em>pathlib.Path</em></a><em>, </em><em>optional</em>) – Absolute or relative path to the OpenCL kernel source file.
 Defaults to <code class="docutils literal notranslate"><span class="pre">pyroclast/kernels/preprocessing.cl</span></code> resolved relative
-to this module’s location.  Override in tests to use a stub kernel.</p>
+to this module’s location.  Override in tests to use a stub kernel.</p></li>
+<li><p><strong>profiling</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><em>bool</em></a>)</p></li>
+</ul>
 </dd>
 <dt class="field-even">Raises<span class="colon">:</span></dt>
 <dd class="field-even"><ul class="simple">
@@ -828,6 +907,34 @@ element in <code class="docutils literal notranslate"><span class="pre">habitats
 <li><p><strong>pyopencl.Error</strong> – On any OpenCL runtime error during buffer operations or kernel
     execution.</p></li>
 </ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyroclast.adapters.opencl_adapter.PyOpenCLAdapter.reset_profile">
+<span class="sig-name descname"><span class="pre">reset_profile</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/adapters/opencl_adapter.html#PyOpenCLAdapter.reset_profile"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.adapters.opencl_adapter.PyOpenCLAdapter.reset_profile" title="Link to this definition">¶</a></dt>
+<dd><p>Clear accumulated kernel timing data.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="pyroclast.adapters.opencl_adapter.PyOpenCLAdapter.benchmark">
+<span class="sig-name descname"><span class="pre">benchmark</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/pyroclast/adapters/opencl_adapter.html#PyOpenCLAdapter.benchmark"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#pyroclast.adapters.opencl_adapter.PyOpenCLAdapter.benchmark" title="Link to this definition">¶</a></dt>
+<dd><p>Return timing and bandwidth statistics from real kernel executions.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Raises<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#NotImplementedError" title="(in Python v3.14)"><strong>NotImplementedError</strong></a> – If the adapter was constructed without <code class="docutils literal notranslate"><span class="pre">profiling=True</span></code>.</p></li>
+<li><p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#ValueError" title="(in Python v3.14)"><strong>ValueError</strong></a> – If no kernel launches have been recorded yet.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><a class="reference internal" href="#pyroclast.domain.models.BenchResult" title="pyroclast.domain.models.BenchResult"><em>BenchResult</em></a></p>
 </dd>
 </dl>
 </dd></dl>

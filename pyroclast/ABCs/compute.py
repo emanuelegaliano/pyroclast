@@ -27,7 +27,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
 from pyroclast.ABCs.repository import RasterMap
-from pyroclast.domain.models import CompactedHabitat
+from pyroclast.domain.models import BenchResult, CompactedHabitat
 
 
 class IComputeAdapter(ABC):
@@ -112,3 +112,25 @@ class IComputeAdapter(ABC):
             If device initialisation or kernel compilation fails (raised by
             the concrete implementation).
         """
+
+    def benchmark(self) -> BenchResult:
+        """Return timing and bandwidth statistics from real kernel executions.
+
+        Statistics are collected during actual ``batch_preprocess`` calls when
+        the adapter is constructed with ``profiling=True``.  Calling this
+        method without having run at least one ``batch_preprocess`` first, or
+        without enabling profiling, raises ``NotImplementedError``.
+
+        Returns
+        -------
+        BenchResult
+            Timing and bandwidth statistics derived from real kernel launches.
+
+        Raises
+        ------
+        NotImplementedError
+            If the concrete adapter does not support profiling.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support benchmark()."
+        )

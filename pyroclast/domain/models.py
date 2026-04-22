@@ -154,6 +154,38 @@ class CompactedHabitat:
 
 
 @dataclass(frozen=True)
+class BenchResult:
+    """Immutable Value Object holding the results of a kernel benchmark run.
+
+    Parameters
+    ----------
+    kernel_name : str
+        Name of the OpenCL kernel that was benchmarked.
+    shape : tuple[int, int]
+        2-D grid shape used for the synthetic benchmark data.
+    n_cells : int
+        Total number of cells (``shape[0] * shape[1]``).
+    n_runs : int
+        Number of timed kernel launches (excluding warmup).
+    mean_ms : float
+        Mean kernel execution time in milliseconds.
+    min_ms : float
+        Minimum kernel execution time in milliseconds.
+    bandwidth_gbs : float
+        Effective memory bandwidth in GB/s, computed from the adapter's
+        bytes-per-cell model and the mean execution time.
+    """
+
+    kernel_name: str
+    shape: tuple[int, int]
+    n_cells: int
+    n_runs: int
+    mean_ms: float
+    min_ms: float
+    bandwidth_gbs: float
+
+
+@dataclass(frozen=True)
 class MonteCarloConfig:
     """Immutable Value Object carrying the parameters for a Monte Carlo run.
 

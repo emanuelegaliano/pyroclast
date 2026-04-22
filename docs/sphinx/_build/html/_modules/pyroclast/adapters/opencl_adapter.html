@@ -86,7 +86,7 @@
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">pyroclast.ABCs.compute</span><span class="w"> </span><span class="kn">import</span> <span class="n">IComputeAdapter</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">pyroclast.ABCs.repository</span><span class="w"> </span><span class="kn">import</span> <span class="n">RasterMap</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">pyroclast.domain.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">CompactedHabitat</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pyroclast.domain.models</span><span class="w"> </span><span class="kn">import</span> <span class="n">BenchResult</span><span class="p">,</span> <span class="n">CompactedHabitat</span>
 
 <span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
 
@@ -184,7 +184,11 @@
 <span class="sd">    &gt;&gt;&gt; results = adapter.batch_preprocess(invasion_map, habitats)</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">kernel_path</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">kernel_path</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">profiling</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">kernel_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">kernel_path</span> <span class="o">=</span> <span class="p">(</span>
                 <span class="n">Path</span><span class="p">(</span><span class="vm">__file__</span><span class="p">)</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">parent</span> <span class="o">/</span> <span class="s2">&quot;kernels&quot;</span> <span class="o">/</span> <span class="s2">&quot;preprocessing.cl&quot;</span>
@@ -196,7 +200,16 @@
             <span class="p">)</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">_ctx</span><span class="p">:</span> <span class="n">cl</span><span class="o">.</span><span class="n">Context</span> <span class="o">=</span> <span class="n">_build_context</span><span class="p">()</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_queue</span><span class="p">:</span> <span class="n">cl</span><span class="o">.</span><span class="n">CommandQueue</span> <span class="o">=</span> <span class="n">cl</span><span class="o">.</span><span class="n">CommandQueue</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_ctx</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_profiling</span> <span class="o">=</span> <span class="n">profiling</span>
+        <span class="n">queue_props</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">cl</span><span class="o">.</span><span class="n">command_queue_properties</span><span class="o">.</span><span class="n">PROFILING_ENABLE</span> <span class="k">if</span> <span class="n">profiling</span> <span class="k">else</span> <span class="mi">0</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_queue</span><span class="p">:</span> <span class="n">cl</span><span class="o">.</span><span class="n">CommandQueue</span> <span class="o">=</span> <span class="n">cl</span><span class="o">.</span><span class="n">CommandQueue</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_ctx</span><span class="p">,</span> <span class="n">properties</span><span class="o">=</span><span class="n">queue_props</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_kernel_times_ms</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_last_n_cells</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_last_shape</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
 
         <span class="n">kernel_source</span> <span class="o">=</span> <span class="n">kernel_path</span><span class="o">.</span><span class="n">read_text</span><span class="p">(</span><span class="n">encoding</span><span class="o">=</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)</span>
         <span class="k">try</span><span class="p">:</span>
@@ -271,6 +284,8 @@
             <span class="n">invasion_map</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">ravel</span><span class="p">(),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span>
         <span class="p">)</span>
         <span class="n">total_cells</span> <span class="o">=</span> <span class="n">p_flat</span><span class="o">.</span><span class="n">size</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_last_n_cells</span> <span class="o">=</span> <span class="n">total_cells</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_last_shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">invasion_map</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">invasion_map</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
         <span class="n">mf</span> <span class="o">=</span> <span class="n">cl</span><span class="o">.</span><span class="n">mem_flags</span>
 
         <span class="n">p_buf</span><span class="p">:</span> <span class="n">cl</span><span class="o">.</span><span class="n">Buffer</span> <span class="o">=</span> <span class="n">cl</span><span class="o">.</span><span class="n">Buffer</span><span class="p">(</span>
@@ -312,7 +327,7 @@
                         <span class="n">size</span><span class="o">=</span><span class="n">out_flat</span><span class="o">.</span><span class="n">nbytes</span><span class="p">,</span>
                     <span class="p">)</span>
 
-                    <span class="bp">self</span><span class="o">.</span><span class="n">_kernel</span><span class="p">(</span>
+                    <span class="n">event</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_kernel</span><span class="p">(</span>
                         <span class="bp">self</span><span class="o">.</span><span class="n">_queue</span><span class="p">,</span>
                         <span class="p">(</span><span class="n">total_cells</span><span class="p">,),</span>
                         <span class="kc">None</span><span class="p">,</span>
@@ -324,6 +339,12 @@
 
                     <span class="n">cl</span><span class="o">.</span><span class="n">enqueue_copy</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_queue</span><span class="p">,</span> <span class="n">out_flat</span><span class="p">,</span> <span class="n">out_buf</span><span class="p">)</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">_queue</span><span class="o">.</span><span class="n">finish</span><span class="p">()</span>
+
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_profiling</span><span class="p">:</span>
+                        <span class="n">elapsed_ms</span> <span class="o">=</span> <span class="p">(</span>
+                            <span class="n">event</span><span class="o">.</span><span class="n">profile</span><span class="o">.</span><span class="n">end</span> <span class="o">-</span> <span class="n">event</span><span class="o">.</span><span class="n">profile</span><span class="o">.</span><span class="n">start</span>
+                        <span class="p">)</span> <span class="o">*</span> <span class="mf">1e-6</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">_kernel_times_ms</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">elapsed_ms</span><span class="p">)</span>
                 <span class="k">finally</span><span class="p">:</span>
                     <span class="k">if</span> <span class="n">h_buf</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                         <span class="n">h_buf</span><span class="o">.</span><span class="n">release</span><span class="p">()</span>
@@ -351,6 +372,55 @@
             <span class="n">p_buf</span><span class="o">.</span><span class="n">release</span><span class="p">()</span>
 
         <span class="k">return</span> <span class="n">results</span></div>
+
+
+<div class="viewcode-block" id="PyOpenCLAdapter.reset_profile">
+<a class="viewcode-back" href="../../../api.html#pyroclast.adapters.opencl_adapter.PyOpenCLAdapter.reset_profile">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">reset_profile</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Clear accumulated kernel timing data.&quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_kernel_times_ms</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="PyOpenCLAdapter.benchmark">
+<a class="viewcode-back" href="../../../api.html#pyroclast.adapters.opencl_adapter.PyOpenCLAdapter.benchmark">[docs]</a>
+    <span class="k">def</span><span class="w"> </span><span class="nf">benchmark</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">BenchResult</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return timing and bandwidth statistics from real kernel executions.</span>
+
+<span class="sd">        Raises</span>
+<span class="sd">        ------</span>
+<span class="sd">        NotImplementedError</span>
+<span class="sd">            If the adapter was constructed without ``profiling=True``.</span>
+<span class="sd">        ValueError</span>
+<span class="sd">            If no kernel launches have been recorded yet.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_profiling</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+                <span class="s2">&quot;Profiling is disabled. Construct with profiling=True.&quot;</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_kernel_times_ms</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;No kernel executions recorded yet. &quot;</span>
+                <span class="s2">&quot;Call batch_preprocess() at least once before benchmark().&quot;</span>
+            <span class="p">)</span>
+        <span class="c1"># reads: 4 B (float32 p_map) + 1 B (uint8 h_map); writes: 4 B (float32 out)</span>
+        <span class="n">_BYTES_PER_CELL</span> <span class="o">=</span> <span class="mi">9</span>
+        <span class="n">times</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_kernel_times_ms</span>
+        <span class="n">mean_ms</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">times</span><span class="p">))</span>
+        <span class="n">min_ms</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">min</span><span class="p">(</span><span class="n">times</span><span class="p">))</span>
+        <span class="c1"># n_cells is the same for every launch (all habitats share the invasion map shape)</span>
+        <span class="c1"># infer it from the last recorded run via bandwidth formula inversion is not possible,</span>
+        <span class="c1"># so we store it alongside the times</span>
+        <span class="n">n_cells</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_n_cells</span>
+        <span class="n">bandwidth_gbs</span> <span class="o">=</span> <span class="p">(</span><span class="n">_BYTES_PER_CELL</span> <span class="o">*</span> <span class="n">n_cells</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">mean_ms</span> <span class="o">*</span> <span class="mf">1e-3</span><span class="p">)</span> <span class="o">/</span> <span class="mf">1e9</span>
+        <span class="k">return</span> <span class="n">BenchResult</span><span class="p">(</span>
+            <span class="n">kernel_name</span><span class="o">=</span><span class="n">_KERNEL_NAME</span><span class="p">,</span>
+            <span class="n">shape</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_last_shape</span><span class="p">,</span>
+            <span class="n">n_cells</span><span class="o">=</span><span class="n">n_cells</span><span class="p">,</span>
+            <span class="n">n_runs</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="n">times</span><span class="p">),</span>
+            <span class="n">mean_ms</span><span class="o">=</span><span class="n">mean_ms</span><span class="p">,</span>
+            <span class="n">min_ms</span><span class="o">=</span><span class="n">min_ms</span><span class="p">,</span>
+            <span class="n">bandwidth_gbs</span><span class="o">=</span><span class="n">bandwidth_gbs</span><span class="p">,</span>
+        <span class="p">)</span></div>
 </div>
 
 </pre></div>
