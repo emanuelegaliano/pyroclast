@@ -15,7 +15,7 @@ Algorithm (Kernel 2)
 The kernel uses a 1-D NDRange of ``config.n_runs`` work-items.  Each
 work-item ``r``:
 
-1. Initialises an xorshift32 RNG state from ``(config.seed, r)``.
+1. Seeds an MWC64X RNG stream at position ``base_offset + r * n_cells``.
 2. Loops over the ``habitat.n_cells`` compacted habitat cells.
 3. For each cell ``k`` draws ``x ~ U(0, 1)`` and tests ``x <= p_vec[k]``.
 4. Checks whether ``invaded_fraction > config.threshold``.
@@ -43,8 +43,8 @@ first GPU found, fallback to any available device via
 
 OpenCL version
 --------------
-Requires OpenCL 2.0 or later.  The kernel is compiled with
-``-cl-std=CL2.0`` to enable ``work_group_reduce_add``.
+Requires OpenCL 1.2 or later.  The kernel is compiled with a ``-I`` flag
+pointing to the MWC64X header directory.
 
 See also
 --------
@@ -130,8 +130,8 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
        fallback).
     2. **Context and queue creation** — initialises the OpenCL runtime.
     3. **Kernel compilation** — reads ``monte_carlo.cl`` and builds the
-       ``monte_carlo_run`` kernel for the selected device with
-       ``-cl-std=CL2.0``.
+       ``monte_carlo_run`` kernel with a ``-I`` flag pointing at the
+       MWC64X header directory.
 
     Parameters
     ----------
@@ -183,11 +183,14 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
         self._kernel_launches: list[tuple[float, int]] = []
         self._last_n_cells: int = 0
 
+        mwc64x_include = (
+            Path(__file__).parent.parent.parent / "mwc64x-v0" / "mwc64x" / "cl"
+        )
         kernel_source = kernel_path.read_text(encoding="utf-8")
         try:
             self._program: cl.Program = cl.Program(
                 self._ctx, kernel_source
-            ).build()
+            ).build(options=f"-I {mwc64x_include}")
         except cl.RuntimeError as exc:
             raise RuntimeError(
                 f"OpenCL kernel compilation failed.\n"
@@ -258,7 +261,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
                 count_buf,
                 np.uint32(habitat.n_cells),
                 np.float32(config.threshold),
-                np.uint32(config.seed),
+                np.uint64(int(config.seed)),
                 np.uint32(config.n_runs),
             )
 
@@ -363,7 +366,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
                         count_buf,
                         np.uint32(habitat.n_cells),
                         np.float32(config.threshold),
-                        np.uint32(config.seed + i),
+                        np.uint64(int(config.seed) + i * batch_size * habitat.n_cells),
                         np.uint32(batch_size),
                     )
                     cl.enqueue_copy(self._queue, count_host, count_buf)
