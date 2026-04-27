@@ -133,16 +133,18 @@ class IMonteCarloAdapter(ABC):
             Estimated probability in :math:`[0.0, 1.0]`.
         """
 
-    def benchmark(self) -> BenchResult:
+    def benchmark(self) -> list[BenchResult]:
         """Return timing and bandwidth statistics from real kernel executions.
 
         Statistics are collected during actual ``run`` or ``run_batched``
         calls when the adapter is constructed with ``profiling=True``.
+        Each entry in the returned list corresponds to one distinct kernel.
 
         Returns
         -------
-        BenchResult
-            Timing and bandwidth statistics derived from real kernel launches.
+        list[BenchResult]
+            One entry per kernel stage (single-element for 1-D adapters,
+            two elements for the 2-D two-pass adapter).
 
         Raises
         ------

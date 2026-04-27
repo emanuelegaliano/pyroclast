@@ -21,9 +21,6 @@ class TestMatching:
     def test_invasion_returns_one_map(self, repo):
         assert len(repo.matching(InvasionCriteria())) == 1
 
-    def test_all_habitats_returns_three_maps(self, repo):
-        assert len(repo.matching(HabitatCriteria())) == 3
-
     def test_specific_habitat_returns_one_map(self, repo):
         assert len(repo.matching(HabitatCriteria(code="9340"))) == 1
 

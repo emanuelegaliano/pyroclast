@@ -127,13 +127,14 @@ def main() -> None:
     print(f"  time (min)  : {preprocess_bench.min_ms:.3f} ms")
     print(f"  bandwidth   : {preprocess_bench.bandwidth_gbs:.2f} GB/s", end="\n\n")
 
-    mc_bench = mc_adapter.benchmark()
-    print(f"  kernel      : {mc_bench.kernel_name}")
-    print(f"  shape       : {mc_bench.shape[0]} x {mc_bench.shape[1]}  ({mc_bench.n_cells:,} cells)")
-    print(f"  launches    : {mc_bench.n_runs}")
-    print(f"  time (mean) : {mc_bench.mean_ms:.3f} ms")
-    print(f"  time (min)  : {mc_bench.min_ms:.3f} ms")
-    print(f"  bandwidth   : {mc_bench.bandwidth_gbs:.2f} GB/s")
+    for mc_bench in mc_adapter.benchmark():
+        print(f"  kernel      : {mc_bench.kernel_name}")
+        print(f"  shape       : {mc_bench.shape[0]} x {mc_bench.shape[1]}  ({mc_bench.n_cells:,} cells)")
+        print(f"  launches    : {mc_bench.n_runs}")
+        print(f"  time (mean) : {mc_bench.mean_ms:.3f} ms")
+        print(f"  time (min)  : {mc_bench.min_ms:.3f} ms")
+        print(f"  bandwidth   : {mc_bench.bandwidth_gbs:.2f} GB/s")
+        print()
 
 
 if __name__ == "__main__":

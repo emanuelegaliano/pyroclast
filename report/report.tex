@@ -1,0 +1,59 @@
+\documentclass[12pt, a4paper]{report}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage[hidelinks]{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\geometry{margin=2.5cm}
+
+\title{\textbf{Pyroclast: GPU-Accelerated Monte Carlo Simulation for Lava-Flow Habitat Impact Assessment}}
+\author{Emanuele Galiano}
+\date{\today}
+
+% ── OpenCL listing style ───────────────────────────────────────────────────────
+\lstdefinelanguage{OpenCL}{
+  language=C,
+  morekeywords={__kernel,__global,__local,__constant,__private,
+                kernel,global,local,constant,private,
+                get_global_id,get_local_id,get_group_id,
+                barrier,CLK_LOCAL_MEM_FENCE,CLK_GLOBAL_MEM_FENCE,
+                atomic_add,uint,ulong,uchar,ushort,float2,float4,int2,int4},
+  sensitive=true,
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue}\bfseries,
+  commentstyle=\color{gray},
+  stringstyle=\color{teal},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  frame=single,
+  breaklines=true,
+  tabsize=4,
+}
+
+% ──────────────────────────────────────────────────────────────────────────────
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+
+\input{chapters/kernel_monte_carlo}
+
+\appendix
+\input{chapters/appendix_architecture}
+
+% dummy citation
+DUMMY CITATION \cite{percival2020architecture}
+
+\bibliographystyle{plain}
+\bibliography{refs}
+
+\end{document}

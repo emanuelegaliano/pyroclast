@@ -407,7 +407,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
         self._kernel_launches.clear()
         self._last_n_cells = 0
 
-    def benchmark(self) -> BenchResult:
+    def benchmark(self) -> list[BenchResult]:
         """Return timing and bandwidth statistics from real kernel executions.
 
         Raises
@@ -430,7 +430,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
         total_bytes = sum(b for _, b in self._kernel_launches)
         total_time_s = sum(times_ms) * 1e-3
         bandwidth_gbs = total_bytes / total_time_s / 1e9
-        return BenchResult(
+        return [BenchResult(
             kernel_name=_KERNEL_NAME,
             shape=(self._last_n_cells, 1),
             n_cells=self._last_n_cells,
@@ -438,4 +438,4 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
             mean_ms=float(np.mean(times_ms)),
             min_ms=float(np.min(times_ms)),
             bandwidth_gbs=bandwidth_gbs,
-        )
+        )]

@@ -1,0 +1,274 @@
+\chapter{Monte Carlo Kernel}
+\label{chap:kernel_mc}
+
+\section{Problem Statement}
+
+After the preprocessing pipeline applies stream compaction to the invasion
+probability raster, each habitat is represented as a dense vector
+$\mathbf{p} \in [0,1]^{N_c}$, where $p_k$ is the probability that active
+cell $k$ is reached by the lava flow.  The Monte Carlo kernel estimates the
+probability that the \emph{invaded fraction} of cells strictly exceeds a
+critical threshold $\theta$:
+
+\begin{equation}
+  \Pr\!\left(\frac{1}{N_c}\sum_{k=0}^{N_c-1} X_k > \theta\right),
+  \qquad X_k \sim \mathrm{Bernoulli}(p_k).
+\end{equation}
+
+The estimate is obtained by running $R$ independent trials and counting how
+many exceed the threshold.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{1-D Kernel}
+\label{sec:kernel1d}
+
+\subsection{Launch Scheme}
+
+The NDRange is one-dimensional: each work-item handles one complete trial.
+
+\begin{center}
+\begin{tabular}{ll}
+  \textbf{Global NDRange} & $\lceil R / \mathtt{WG\_SIZE} \rceil \times \mathtt{WG\_SIZE}$ \\
+  \textbf{Local NDRange}  & $\mathtt{WG\_SIZE} = 256$ \\
+\end{tabular}
+\end{center}
+
+\subsection{Algorithm for Work-Item \texorpdfstring{$r$}{r}}
+
+\begin{enumerate}
+  \item Seed MWC64X at stream position
+        $\mathtt{base\_offset} + r \cdot N_c$ with length $N_c$:
+        each work-item occupies a non-overlapping segment of the RNG sequence.
+  \item For each cell $k = 0, \ldots, N_c - 1$: draw
+        $x \sim U(0,1)$ and compute $b_k = \mathbf{1}[x \le p_k]$.
+  \item Count invaded cells: $\mathtt{invaded} = \sum_k b_k$.
+  \item Compute the success bit:
+        $s_r = \mathbf{1}[\mathtt{invaded} / N_c > \theta]$.
+  \item Participate in the work-group tree reduction;
+        thread 0 issues \texttt{atomic\_add} on the global counter.
+\end{enumerate}
+
+\subsection{Source}
+
+\begin{lstlisting}[language=OpenCL, caption={1-D kernel --- \texttt{monte\_carlo.cl}}]
+__kernel __attribute__((reqd_work_group_size(WG_SIZE, 1, 1)))
+void monte_carlo_run(
+    __global const float* p_vec,
+    __global int*         count,
+    const uint            n_cells,
+    const float           threshold,
+    const ulong           base_offset,
+    const uint            n_runs)
+{
+    uint r   = get_global_id(0);
+    uint lid = get_local_id(0);
+
+    int my_result = 0;
+    if (r < n_runs)
+        my_result = _run_trial(p_vec, n_cells, threshold,
+                               base_offset + (ulong)r * n_cells);
+
+    __local int scratch[WG_SIZE];
+    scratch[lid] = my_result;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    _tree_reduce(scratch, lid);
+
+    if (lid == 0)
+        atomic_add(count, scratch[0]);
+}
+\end{lstlisting}
+
+\subsection{\texttt{p\_vec} Reads and Cache Behaviour}
+
+At each iteration $k$, all 256 work-items in the work-group read the
+\emph{same} element \texttt{p\_vec[k]}: the value is loaded into L1 cache
+once and broadcast to all threads at no additional cost.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{2-D Kernel Attempt}
+\label{sec:kernel2d}
+
+\subsection{Motivation}
+
+In the 1-D kernel each work-item samples $N_c$ cells sequentially.  The idea
+behind the 2-D kernel is to parallelise the cell axis as well: each work-item
+samples exactly \emph{one} pair $(\text{run}\; r,\; \text{cell}\; k)$,
+exploiting a two-dimensional NDRange.
+
+\begin{center}
+\begin{tabular}{ll}
+  \textbf{Global NDRange} &
+    $\lceil R/\mathtt{WG\_R}\rceil\!\times\!\mathtt{WG\_R}\ ,\quad
+     \lceil N_c/\mathtt{WG\_C}\rceil\!\times\!\mathtt{WG\_C}$ \\
+  \textbf{Local NDRange}  & $(\mathtt{WG\_R},\;\mathtt{WG\_C}) = (8,\;32)$ \\
+\end{tabular}
+\end{center}
+
+\subsection{Need for an Intermediate Buffer}
+
+When $N_c > \mathtt{WG\_C}$, the cells of a single run are spread across
+multiple work-groups along the $k$ axis.  For example, with $N_c = 96$ and
+$\mathtt{WG\_C} = 32$:
+
+\begin{center}
+\begin{tabular}{ccc}
+  \textbf{Work-group} & \textbf{Runs} & \textbf{Cells} \\
+  \hline
+  WG$(0,0)$ & $0\ldots7$ & $0\ldots31$   \\
+  WG$(0,1)$ & $0\ldots7$ & $32\ldots63$  \\
+  WG$(0,2)$ & $0\ldots7$ & $64\ldots95$  \\
+\end{tabular}
+\end{center}
+
+To determine whether run~0 exceeded the threshold, the partial counts from
+all three work-groups must be summed.  In OpenCL~1.2
+\textbf{work-groups cannot synchronise with each other} within a single
+kernel launch: \texttt{barrier} is local to a work-group and has no global
+visibility.  The only available global synchronisation point is the
+\emph{end of a kernel launch}.  The solution is therefore to write partial
+counts to a global buffer \texttt{g\_partial} and launch a second kernel
+that reduces them.
+
+\subsection{Source — Kernel 1: \texttt{mc\_partial\_sums}}
+
+\begin{lstlisting}[language=OpenCL, caption={2-D kernel, first launch --- \texttt{monte\_carlo\_2d.cl}}]
+__kernel __attribute__((reqd_work_group_size(WG_R, WG_C, 1)))
+void mc_partial_sums(
+    __global const float* p_vec,
+    __global int*         g_partial,   /* [n_groups_c][n_runs_padded] */
+    const uint            n_cells,
+    const uint            n_runs,
+    const ulong           base_offset,
+    const uint            n_runs_padded)
+{
+    uint r     = get_global_id(0);
+    uint k     = get_global_id(1);
+    uint lid_r = get_local_id(0);
+    uint lid_c = get_local_id(1);
+
+    mwc64x_state_t rng;
+    MWC64X_SeedStreams(&rng,
+        base_offset + (ulong)r * n_cells + k, 1UL);
+
+    int my_bit = 0;
+    if (r < n_runs && k < n_cells)
+        my_bit = (_to_float(MWC64X_NextUint(&rng)) <= p_vec[k])
+                 ? 1 : 0;
+
+    __local int scratch[WG_R * WG_C];
+    scratch[lid_r * WG_C + lid_c] = my_bit;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    _reduce_cols(scratch, lid_r, lid_c);
+
+    if (lid_c == 0 && r < n_runs)
+        g_partial[get_group_id(1) * n_runs_padded + r]
+            = scratch[lid_r * WG_C];
+}
+\end{lstlisting}
+
+\subsection{Intermediate Buffer Size}
+
+The \texttt{g\_partial} buffer uses a transposed layout
+$[\,n\_\text{groups\_c}\,][\,n\_\text{runs\_padded}\,]$, where
+
+\begin{equation}
+  n\_\text{groups\_c} = \left\lceil \frac{N_c}{\mathtt{WG\_C}} \right\rceil,
+  \qquad
+  n\_\text{runs\_padded} =
+    \left\lceil \frac{R}{\mathtt{WG\_R}} \right\rceil \times \mathtt{WG\_R}.
+\end{equation}
+
+With real project data (where $N_c$ may have  $\approx 200\,000$ active
+cells after stream compaction, batch size $R = 100\,000$,
+$\mathtt{WG\_C} = 32$, $\mathtt{WG\_R} = 8$):
+
+\begin{align}
+  n\_\text{groups\_c}    &= \lceil 200\,000 / 32 \rceil = 6\,250 \notag\\
+  n\_\text{runs\_padded} &= \lceil 100\,000 / 8  \rceil \times 8
+                          = 100\,000 \notag\\
+  |\texttt{g\_partial}|  &= 6\,250 \times 100\,000 \times 4\,\text{B}
+                          = \mathbf{2.5\,\text{GB.}} \notag
+\end{align}
+
+This buffer is allocated on the CPU via \texttt{np.zeros}, copied to the
+GPU, and released on \emph{every batch}.  With 10 batches per habitat the
+cumulative transfer exceeds 25\,GB, making the 2-D kernel orders of
+magnitude slower than the 1-D kernel.
+
+\subsection{Why Barriers Do Not Solve the Problem}
+
+The primitive \texttt{barrier(CLK\_LOCAL\_MEM\_FENCE)} synchronises only the
+work-items \emph{within the same work-group}.  Work-groups \texttt{WG(0,0)},
+\texttt{WG(0,1)}, and \texttt{WG(0,2)} from the example above execute
+independently: OpenCL~1.2 provides no global barrier primitive that could
+force them to wait for one another within a single kernel launch.  The only
+global synchronisation available is the kernel launch boundary itself, which
+is why the two-kernel design is necessary.
+
+\subsection{Comparison with the 1-D Kernel}
+
+The 2-D kernel offers no architectural advantage over the 1-D kernel for
+two reasons:
+
+\begin{enumerate}
+  \item \textbf{Cache broadcast.}  In the 1-D kernel, at iteration $k$ all
+        256 work-items read \texttt{p\_vec[k]}: a single cache line is
+        loaded once and the value is broadcast to all threads at no extra
+        cost.  The 2-D kernel reads 32 consecutive floats per cycle
+        (coalesced), which is not meaningfully better in terms of effective
+        throughput.
+
+  \item \textbf{Intermediate buffer cost.}  Parallelising the cell axis
+        introduces an $O(N_c \times R)$ intermediate buffer that eliminates
+        any computational advantage on real-world data.
+\end{enumerate}
+
+The 1-D kernel therefore remains the optimal choice for this problem.
+
+\subsection{Experimental Results}
+\label{sec:bench}
+
+\subsubsection*{Test Environment}
+
+\begin{center}
+\begin{tabular}{ll}
+  \toprule
+  \textbf{Component} & \textbf{Details} \\
+  \midrule
+  CPU             & Intel Core i7-12700H (20 threads, 4.70\,GHz) \\
+  GPU             & NVIDIA GeForce RTX 4050 Max-Q / Mobile \\
+  RAM             & 15.24\,GiB DDR5 \\
+  OpenCL          & 1.2 \\
+  Python          & 3.14.4 \\
+  \midrule
+  \texttt{MC\_RUNS}      & 1\,000 \\
+  \texttt{MC\_THRESHOLD} & 0.009 \\
+  \texttt{MC\_BATCHES}   & 10 \\
+  Habitats processed     & 4 \\
+  Kernel launches        & 40 \ ($4\ \text{habitats} \times 10\ \text{batches}$) \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection*{Timing and Bandwidth}
+
+\begin{center}
+\begin{tabular}{lrrrr}
+  \toprule
+  \textbf{Kernel} & \textbf{Launches} &
+  \textbf{Mean (ms)} & \textbf{Min (ms)} & \textbf{Bandwidth (GB/s)} \\
+  \midrule
+  \texttt{monte\_carlo\_run} (1-D)    & 40 &   2.273 &  0.297 & 15.19 \\
+  \midrule
+  \texttt{mc\_partial\_sums} (2-D)    & 40 & 185.379 & 13.259 &  0.19 \\
+  \texttt{mc\_threshold\_count} (2-D) & 40 &   0.087 &  0.010 & 12.90 \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+The 2-D pipeline is $\approx\!82\times$ slower than the 1-D kernel (speedup
+$= 0.01\times$).  The bottleneck is \texttt{mc\_partial\_sums}, whose low
+effective bandwidth (0.19\,GB/s versus 15.19\,GB/s for the 1-D kernel)
+reflects the allocation and transfer latency of the 2.5\,GB
+\texttt{g\_partial} buffer per batch, as discussed in
+Section~\ref{sec:kernel2d}.
