@@ -24,14 +24,14 @@ def section(title: str) -> None:
 
 def main() -> None:
     load_dotenv()
-    data_path = os.getenv("DATA_PATH", "data").strip('/"\'')
+    data_path = os.getenv("DATA_PATH", "data").strip()
     force_recompute = os.getenv("FORCE_RECOMPUTE", "0").strip().lower() in ("1", "true", "yes")
-    cache_dir = Path(data_path) / "cache"  # Caching on the same volume as input
-    cache_dir.mkdir(exist_ok=True)
+    cache_dir = Path(os.getenv("CACHE_DIR", str(Path(data_path) / "cache")))
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
     # ── 1. Repository ────────────────────────────────────────────
     section("1. Repository — raw raster data")
-    repo = FileMapRepository(data_path)
+    repo = FileMapRepository(data_path, invasion_map=os.getenv("INVASION_MAP"))
 
     invasion = repo.get(InvasionCriteria())
     p = invasion.data

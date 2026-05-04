@@ -39,8 +39,8 @@ def _run_mc(adapter, label, compacted, config, n_batches) -> BenchResult:
 def main() -> None:
     load_dotenv()
     data_path = os.getenv("DATA_PATH", "data").strip('/"\'')
-    cache_dir = Path(data_path) / "cache"
-    cache_dir.mkdir(exist_ok=True)
+    cache_dir = Path(os.getenv("CACHE_DIR", str(Path(data_path) / "cache")))
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
     mc_config = MonteCarloConfig(
         n_runs=int(os.getenv("MC_RUNS", "1000000")),
@@ -57,7 +57,7 @@ def main() -> None:
 
     # ── Preprocessing (cached) ───────────────────────────────────
     section("Preprocessing")
-    repo = FileMapRepository(data_path)
+    repo = FileMapRepository(data_path, invasion_map=os.getenv("INVASION_MAP"))
     invasion = repo.get(InvasionCriteria())
     habitats = repo.matching(HabitatCriteria())
     preprocess_adapter = PyOpenCLAdapter()

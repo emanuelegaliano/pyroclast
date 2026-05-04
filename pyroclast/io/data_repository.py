@@ -220,32 +220,43 @@ class FileMapStrategy(MapRepositoryStrategy):
     Parameters
     ----------
     data_dir : pathlib.Path
-        Root data directory.  Must contain exactly one ``.tif`` file at the
-        top level (the invasion map) and a ``habitats/`` subdirectory with
-        files named ``cb_codice_<code>.tif``.
+        Root data directory.  Must contain a ``habitats/`` subdirectory with
+        files named ``cb_codice_<code>.tif``.  If ``invasion_map`` is not
+        given, exactly one ``.tif`` file must exist at the top level.
+    invasion_map : pathlib.Path or None, optional
+        Explicit path to the invasion-probability GeoTIFF.  When provided,
+        auto-discovery of ``.tif`` files in ``data_dir`` is skipped.  Use
+        this when other ``.tif`` files (e.g. a DEM) share the same directory.
 
     Raises
     ------
     FileNotFoundError
-        If no ``.tif`` file is found at the root level.
+        If no invasion map can be found (neither explicit nor via discovery).
     ValueError
         If any habitat raster shape does not match the invasion map shape.
     """
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, invasion_map: Path | None = None) -> None:
         self._root = data_dir
         self._habitats_dir = data_dir / "habitats"
+        self._invasion_map = invasion_map
 
     @cached_property
     def _all_maps(self) -> list[GeoTiffMap]:
         """Load and cache all maps from disk (called at most once)."""
         maps: list[GeoTiffMap] = []
 
-        invasion_candidates = sorted(self._root.glob("*.tif"))
-        if not invasion_candidates:
-            raise FileNotFoundError(f"No invasion map (.tif) found in {self._root}")
+        if self._invasion_map is not None:
+            invasion_path = self._invasion_map
+            if not invasion_path.is_file():
+                raise FileNotFoundError(f"Invasion map not found: {invasion_path}")
+        else:
+            invasion_candidates = sorted(self._root.glob("*.tif"))
+            if not invasion_candidates:
+                raise FileNotFoundError(f"No invasion map (.tif) found in {self._root}")
+            invasion_path = invasion_candidates[0]
 
-        with rasterio.open(invasion_candidates[0]) as src:
+        with rasterio.open(invasion_path) as src:
             p_data = src.read(1).astype(np.float32)
         np.nan_to_num(p_data, nan=0.0, copy=False)
         maps.append(GeoTiffMap(code="invasion", kind="invasion", data=p_data))
@@ -309,8 +320,11 @@ class FileMapRepository(MapRepository):
     >>> habitats = repo.matching(HabitatCriteria())
     """
 
-    def __init__(self, data_dir: str | Path = "data") -> None:
-        self._strategy = FileMapStrategy(Path(data_dir))
+    def __init__(self, data_dir: str | Path = "data", invasion_map: str | Path | None = None) -> None:
+        self._strategy = FileMapStrategy(
+            Path(data_dir),
+            invasion_map=Path(invasion_map) if invasion_map else None,
+        )
 
     def matching(self, criteria: MapCriteria) -> Sequence[RasterMap]:
         """Return all maps matching the given criteria.
