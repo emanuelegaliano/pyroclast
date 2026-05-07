@@ -1,6 +1,7 @@
 data/
 .env
 .claude/
+.gemini/
 __pycache__/
 .pytest_cache/
 before_pushing.sh

@@ -59,10 +59,20 @@ static int _run_trial(__global const float* p_vec, uint n_cells,
     return ((float)invaded / (float)n_cells) > threshold;
 }
 
+
+/*
+    * Tree reduction: sums the WG_SIZE results in scratch[0..WG_SIZE-1] to
+    * scratch[0] using a power-of-2 tree reduction.  Each step, the lower half
+    * of active threads accumulates from the upper half, halving the active
+    * count until only thread 0 remains.
+    *
+    * Note: WG_SIZE must be a power of 2 for this to work correctly.
+*/
+
 static void _tree_reduce(__local int* scratch, uint lid) {
-    for (uint stride = WG_SIZE >> 1; stride > 0; stride >>= 1) {
+    for (uint stride = WG_SIZE >> 1; stride > 0; stride >>= 1) { // where >> is divide by 2 and >>= is divide by 2 and assign
         if (lid < stride)
-            scratch[lid] += scratch[lid + stride];
+            scratch[lid] += scratch[lid + stride]; // each thread in the lower half adds the corresponding value from the upper half
         barrier(CLK_LOCAL_MEM_FENCE);
     }
 }

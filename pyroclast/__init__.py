@@ -1,7 +1,11 @@
 from .io import FileMapRepository, FileMapStrategy, GeoTiffMap, HabitatCriteria, InvasionCriteria
 from .ABCs import MapRepository, MapCriteria, RasterMap, MapRepositoryStrategy, IComputeAdapter
 from .domain import CompactedHabitat
-from .adapters import PyOpenCLAdapter
+from .adapters import (
+    PyOpenCLAdapter,
+    PyOpenCLMonteCarloAdapter,
+    PyOpenCLMonteCarloPingPongAdapter,
+)
 from .services import run_preprocessing_batch
 
 __all__ = [
@@ -17,6 +21,8 @@ __all__ = [
     # Compute layer
     "IComputeAdapter",
     "PyOpenCLAdapter",
+    "PyOpenCLMonteCarloAdapter",
+    "PyOpenCLMonteCarloPingPongAdapter",
     # Domain
     "CompactedHabitat",
     # Services
