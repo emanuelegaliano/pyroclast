@@ -87,15 +87,33 @@ def main() -> None:
 
     print("\n\nBenchmark completato. Generazione del grafico...")
 
-    plt.figure(figsize=(10, 6))
-    plt.plot(run_sizes, times_std, marker='o', linestyle='-', label="Standard 1-D Kernel", color='#1f77b4', linewidth=2)
-    plt.plot(run_sizes, times_pp, marker='s', linestyle='-', label="Ping-Pong Kernel", color='#ff7f0e', linewidth=2)
+    # Calcolo differenza relativa: (T2 - T1) / T1 * 100
+    # Dove T1 è Standard (1 barriera) e T2 è Ping-Pong (2 barriere)
+    relative_diff = [(pp - std) / std * 100 for std, pp in zip(times_std, times_pp)]
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+
+    # Plot 1: Tempi Assoluti
+    ax1.plot(run_sizes, times_std, marker='o', linestyle='-', label="Standard 1-D Kernel (1 barriera)", color='#1f77b4', linewidth=2)
+    ax1.plot(run_sizes, times_pp, marker='s', linestyle='-', label="Ping-Pong Kernel (2 barriere)", color='#ff7f0e', linewidth=2)
+    ax1.set_ylabel("Tempo Totale Kernel (ms)", fontsize=12)
+    ax1.set_title(f"Benchmark Prestazioni Kernel OpenCL\n(Habitat: {target_habitat.habitat_code}, N_c={target_habitat.n_cells})", fontsize=14)
+    ax1.grid(True, linestyle='--', alpha=0.6)
+    ax1.legend(fontsize=11)
+
+    # Plot 2: Differenza Relativa
+    ax2.plot(run_sizes, relative_diff, marker='d', linestyle='--', color='#2ca02c', linewidth=2, label="(T2-T1)/T1 %")
+    ax2.axhline(0, color='black', linestyle='-', alpha=0.5)  # Linea di riferimento a 0
+    ax2.set_xlabel("Numero di simulazioni (MC_RUNS)", fontsize=12)
+    ax2.set_ylabel("Delta Relativo (%)", fontsize=12)
+    ax2.set_title("Differenza Relativa: (PingPong - Standard) / Standard", fontsize=12)
+    ax2.grid(True, linestyle='--', alpha=0.6)
     
-    plt.title(f"Benchmark Prestazioni Kernel OpenCL\n(Habitat: {target_habitat.habitat_code}, N_c={target_habitat.n_cells})", fontsize=14)
-    plt.xlabel("Numero di simulazioni (MC_RUNS)", fontsize=12)
-    plt.ylabel("Tempo Totale Kernel (ms)", fontsize=12)
-    plt.grid(True, linestyle='--', alpha=0.6)
-    plt.legend(fontsize=11)
+    # Aggiunta annotazioni per facilitare l'interpretazione
+    if relative_diff:
+        ax2.text(run_sizes[0], max(relative_diff), " ↑ Ping-Pong più lento", color='red', verticalalignment='bottom', alpha=0.7)
+        ax2.text(run_sizes[0], min(relative_diff), " ↓ Ping-Pong più veloce", color='green', verticalalignment='top', alpha=0.7)
+
     plt.tight_layout()
     
     if SAVE_FIGURE:
