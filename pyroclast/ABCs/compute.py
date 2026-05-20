@@ -134,3 +134,62 @@ class IComputeAdapter(ABC):
         raise NotImplementedError(
             f"{type(self).__name__} does not support benchmark()."
         )
+
+    @abstractmethod
+    def get_bytes_read(self, invasion_map: RasterMap, habitat: RasterMap) -> int:
+        """Calculate the total number of bytes read from VRAM during kernel execution.
+
+        Parameters
+        ----------
+        invasion_map : RasterMap
+            The base invasion-probability raster.
+        habitat : RasterMap
+            The habitat-presence raster.
+
+        Returns
+        -------
+        int
+            Total bytes read from global memory.
+        """
+
+    @abstractmethod
+    def get_bytes_written(self, invasion_map: RasterMap, habitat: RasterMap) -> int:
+        """Calculate the total number of bytes written to VRAM during kernel execution.
+
+        Parameters
+        ----------
+        invasion_map : RasterMap
+            The base invasion-probability raster (used for shape/type inference).
+        habitat : RasterMap
+            The habitat-presence raster.
+
+        Returns
+        -------
+        int
+            Total bytes written to global memory.
+        """
+
+    def get_bandwidth(
+        self,
+        invasion_map: RasterMap,
+        habitat: RasterMap,
+        time_s: float
+    ) -> float:
+        """Calculate the effective bandwidth in GB/s.
+
+        Parameters
+        ----------
+        invasion_map : RasterMap
+            The base invasion-probability raster.
+        habitat : RasterMap
+            The habitat-presence raster.
+        time_s : float
+            Execution time in seconds.
+
+        Returns
+        -------
+        float
+            Effective bandwidth in gigabytes per second (GB/s), using decimal base (10^9).
+        """
+        total_bytes = self.get_bytes_read(invasion_map, habitat) + self.get_bytes_written(invasion_map, habitat)
+        return total_bytes / time_s / 1e9

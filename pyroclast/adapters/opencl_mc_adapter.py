@@ -8,54 +8,33 @@ Architectural role
 ------------------
 ``PyOpenCLMonteCarloAdapter`` is a *secondary adapter* (driven adapter).
 It translates the domain-level Monte Carlo request into low-level PyOpenCL
-API calls against ``pyroclast/kernels/monte_carlo.cl``.
+API calls against ``pyroclast/kernels/monte_carlo.cl`` (sampling) and
+``pyroclast/kernels/reduce_sum.cl`` (recursive reduction).
 
-Algorithm (Kernel 2)
---------------------
-The kernel uses a 1-D NDRange of ``config.n_runs`` work-items.  Each
-work-item ``r``:
-
-1. Seeds an MWC64X RNG stream at position ``base_offset + r * n_cells``.
-2. Loops over the ``habitat.n_cells`` compacted habitat cells.
-3. For each cell ``k`` draws ``x ~ U(0, 1)`` and tests ``x <= p_vec[k]``.
-4. Checks whether ``invaded_fraction > config.threshold``.
-5. Contributes ``1`` or ``0`` to a work-group reduction via
-   ``work_group_reduce_add``; thread 0 of each group atomically adds the
-   group sum to a single global counter.
-
-The host reads back the counter (1 × int32 = 4 bytes) and computes
-``prob = count / n_runs``.
+Algorithm
+---------
+The sampling kernel writes one ``int`` per work-group into
+``partial[group_id]`` — no atomics. The host then re-launches the shared
+``reduce_sum_int`` kernel, ping-ponging two global buffers, until a
+single scalar remains. Final read-back is one ``int32`` (4 bytes).
 
 Memory layout
 -------------
 * ``p_vec`` buffer: ``n_cells × sizeof(float32)`` — READ_ONLY.
-  In ``run()`` it is allocated and released per call.
-  In ``run_batched()`` it is allocated once before the batch loop and
-  released in a ``finally`` block after all batches complete.
-* ``count`` buffer: ``1 × sizeof(int32)`` — READ_WRITE, initialised to 0
-  by the host before each kernel launch.
-
-Device selection
-----------------
-Identical strategy to :class:`~pyroclast.adapters.opencl_adapter.PyOpenCLAdapter`:
-first GPU found, fallback to any available device via
-``pyopencl.create_some_context``.
-
-OpenCL version
---------------
-Requires OpenCL 1.2 or later.  The kernel is compiled with a ``-I`` flag
-pointing to the MWC64X header directory.
+* ``partial_a`` and ``partial_b`` buffers: ``n_wg × sizeof(int32)`` each,
+  used as ping-pong source/destination during the recursive reduce.
 
 See also
 --------
 pyroclast.ABCs.monte_carlo.IMonteCarloAdapter : the Port this class implements.
-pyroclast.kernels.monte_carlo.cl : the OpenCL kernel source.
-pyroclast.services.monte_carlo.run_monte_carlo : primary consumer.
+pyroclast.kernels.monte_carlo.cl : the OpenCL sampling kernel source.
+pyroclast.kernels.reduce_sum.cl : the OpenCL recursive reducer.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable
 from pathlib import Path
 
@@ -63,21 +42,16 @@ import numpy as np
 import pyopencl as cl  # type: ignore[import-untyped]
 
 from pyroclast.ABCs.monte_carlo import IMonteCarloAdapter
-from pyroclast.domain.models import BenchResult, CompactedHabitat, MonteCarloConfig
+from pyroclast.domain.models import BenchResult, CompactedHabitat, GridTopology, MonteCarloConfig
 
 logger = logging.getLogger(__name__)
 
-_KERNEL_NAME = "monte_carlo_run"
+_REDUCE_KERNEL_NAME = "reduce_sum_int"
+_REDUCE_LWS = 256  # matches REDUCE_WG_SIZE in reduce_sum.cl
 
 
 def _find_gpu_device() -> cl.Device | None:
-    """Scan all OpenCL platforms and return the first GPU device found.
-
-    Returns
-    -------
-    pyopencl.Device or None
-        The first ``CL_DEVICE_TYPE_GPU`` device, or ``None`` if unavailable.
-    """
+    """Scan all OpenCL platforms and return the first GPU device found."""
     try:
         for platform in cl.get_platforms():
             gpu_devices = platform.get_devices(cl.device_type.GPU)
@@ -89,18 +63,7 @@ def _find_gpu_device() -> cl.Device | None:
 
 
 def _build_context() -> cl.Context:
-    """Construct an OpenCL context, preferring a GPU device.
-
-    Returns
-    -------
-    pyopencl.Context
-        A valid OpenCL context ready for use.
-
-    Raises
-    ------
-    pyopencl.Error
-        If context creation fails on all available devices.
-    """
+    """Construct an OpenCL context, preferring a GPU device."""
     gpu = _find_gpu_device()
     if gpu is not None:
         logger.info(
@@ -117,44 +80,24 @@ def _build_context() -> cl.Context:
 
 
 class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
-    """GPU Monte Carlo adapter implementing IMonteCarloAdapter via PyOpenCL.
+    """GPU Monte Carlo adapter using a sampling kernel + recursive reducer.
 
-    This adapter fulfils the
-    :class:`~pyroclast.ABCs.monte_carlo.IMonteCarloAdapter` contract using
-    the ``monte_carlo_run`` OpenCL kernel.  It is constructed once and can
-    be reused across multiple ``run`` calls.
+    Construction performs four one-time operations:
 
-    Construction performs three one-time operations:
+    1. Device discovery (first GPU, fallback to ``create_some_context``).
+    2. Context and queue creation.
+    3. Compilation of the sampling kernel (``monte_carlo.cl`` by default).
+    4. Compilation of the shared ``reduce_sum.cl`` reducer.
 
-    1. **Device discovery** — selects the first GPU (or any device as
-       fallback).
-    2. **Context and queue creation** — initialises the OpenCL runtime.
-    3. **Kernel compilation** — reads ``monte_carlo.cl`` and builds the
-       ``monte_carlo_run`` kernel with a ``-I`` flag pointing at the
-       MWC64X header directory.
+    The reducer is held on ``self._reduce_kernel`` and shared across all
+    subclasses. Subclasses that override the sampling kernel path
+    automatically pick up the same recursive-reduction orchestration.
 
-    Parameters
-    ----------
-    kernel_path : pathlib.Path, optional
-        Path to the OpenCL kernel source file.  Defaults to
-        ``pyroclast/kernels/monte_carlo.cl`` resolved relative to this
-        module.  Override in tests to use a stub kernel.
-
-    Raises
-    ------
-    FileNotFoundError
-        If ``kernel_path`` does not exist.
-    RuntimeError
-        If the OpenCL kernel fails to compile.
-    pyopencl.Error
-        If no OpenCL platform or device is available.
-
-    Examples
-    --------
-    >>> from pyroclast.adapters.opencl_mc_adapter import PyOpenCLMonteCarloAdapter
-    >>> adapter = PyOpenCLMonteCarloAdapter()
-    >>> prob = adapter.run(habitat, config)
+    Subclasses with a different OpenCL kernel function name should set
+    ``_SAMPLING_KERNEL_NAME`` accordingly.
     """
+
+    _SAMPLING_KERNEL_NAME: str = "monte_carlo_run"
 
     def __init__(
         self,
@@ -171,6 +114,14 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
                 f"OpenCL kernel not found at: {kernel_path}"
             )
 
+        reduce_kernel_path = (
+            Path(__file__).parent.parent / "kernels" / "reduce_sum.cl"
+        )
+        if not reduce_kernel_path.is_file():
+            raise FileNotFoundError(
+                f"OpenCL reducer kernel not found at: {reduce_kernel_path}"
+            )
+
         self._ctx: cl.Context = _build_context()
         self._profiling = profiling
         queue_props = (
@@ -179,13 +130,18 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
         self._queue: cl.CommandQueue = cl.CommandQueue(
             self._ctx, properties=queue_props
         )
-        # each entry: (elapsed_ms, bytes_transferred) for one kernel launch
+
+        # Per-call profiling: sampling kernel and reduce passes are tracked
+        # separately so benchmark() can break them down.
         self._kernel_launches: list[tuple[float, int]] = []
+        self._reduce_launches: list[tuple[float, int]] = []
         self._last_n_cells: int = 0
+        self._last_n_wg: int = 0
 
         mwc64x_include = (
             Path(__file__).parent.parent.parent / "mwc64x-v0" / "mwc64x" / "cl"
         )
+
         kernel_source = kernel_path.read_text(encoding="utf-8")
         try:
             self._program: cl.Program = cl.Program(
@@ -198,89 +154,158 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
                 f"Build log:\n{exc}"
             ) from exc
 
-        self._kernel: cl.Kernel = cl.Kernel(self._program, _KERNEL_NAME)
-        logger.info(
-            "PyOpenCLMonteCarloAdapter: kernel '%s' compiled successfully.",
-            _KERNEL_NAME,
+        reduce_source = reduce_kernel_path.read_text(encoding="utf-8")
+        try:
+            self._reduce_program: cl.Program = cl.Program(
+                self._ctx, reduce_source
+            ).build()
+        except cl.RuntimeError as exc:
+            raise RuntimeError(
+                f"OpenCL reducer kernel compilation failed.\n"
+                f"Kernel path: {reduce_kernel_path}\n"
+                f"Build log:\n{exc}"
+            ) from exc
+
+        self._kernel: cl.Kernel = cl.Kernel(
+            self._program, self._SAMPLING_KERNEL_NAME
         )
+        self._reduce_kernel: cl.Kernel = cl.Kernel(
+            self._reduce_program, _REDUCE_KERNEL_NAME
+        )
+        logger.info(
+            "PyOpenCLMonteCarloAdapter: kernels '%s' and '%s' compiled.",
+            self._SAMPLING_KERNEL_NAME,
+            _REDUCE_KERNEL_NAME,
+        )
+
+    def suggest_topology(self, n_runs: int) -> GridTopology:
+        """Suggest an execution grid that saturates the device."""
+        device = self._ctx.devices[0]
+        max_cu = device.max_compute_units
+        lws = 256
+        gws = max_cu * 4 * lws
+        return GridTopology(gws=int(gws), lws=int(lws))
+
+    # ------------------------------------------------------------------
+    # Recursive reducer
+    # ------------------------------------------------------------------
+
+    def _reduce_partial(
+        self,
+        partial_a: cl.Buffer,
+        partial_b: cl.Buffer,
+        n_elems: int,
+    ) -> int:
+        """Recursively reduce partial_a to a single int.
+
+        Ping-pongs between ``partial_a`` and ``partial_b``, launching
+        ``reduce_sum_int`` until one element remains, then copies it back
+        to the host. Records timing/bandwidth in ``self._reduce_launches``
+        when profiling is enabled.
+
+        Parameters
+        ----------
+        partial_a : cl.Buffer
+            Source buffer of ``n_elems`` ints (output of the sampling kernel).
+        partial_b : cl.Buffer
+            Scratch buffer of at least ``ceil(n_elems / _REDUCE_LWS)`` ints.
+        n_elems : int
+            Number of ints currently held in ``partial_a``.
+
+        Returns
+        -------
+        int
+            The scalar sum of the original ``partial_a[0..n_elems-1]``.
+        """
+        src, dst = partial_a, partial_b
+        while n_elems > 1:
+            n_wg = max(1, math.ceil(n_elems / _REDUCE_LWS))
+            gws = n_wg * _REDUCE_LWS
+            evt = self._reduce_kernel(
+                self._queue,
+                (gws,),
+                (_REDUCE_LWS,),
+                dst,
+                src,
+                cl.LocalMemory(4 * _REDUCE_LWS),
+                np.uint32(n_elems),
+            )
+            if self._profiling:
+                evt.wait()
+                elapsed_ms = (evt.profile.end - evt.profile.start) * 1e-6
+                total_bytes = (n_elems + n_wg) * 4
+                self._reduce_launches.append((elapsed_ms, total_bytes))
+            src, dst = dst, src
+            n_elems = n_wg
+
+        final = np.zeros(1, dtype=np.int32)
+        cl.enqueue_copy(self._queue, final, src)
+        self._queue.finish()
+        return int(final[0])
+
+    # ------------------------------------------------------------------
+    # IMonteCarloAdapter API
+    # ------------------------------------------------------------------
 
     def run(
         self,
         habitat: CompactedHabitat,
         config: MonteCarloConfig,
     ) -> float:
-        """Estimate destruction probability for a single habitat via GPU.
-
-        Transfers ``habitat.p_vec`` to VRAM, launches ``monte_carlo_run``
-        with a 1-D NDRange of ``config.n_runs`` work-items, reads back a
-        single int32 counter, and computes the probability estimate.
-
-        Parameters
-        ----------
-        habitat : CompactedHabitat
-            Pre-processed habitat.  ``habitat.n_cells`` must be > 0.
-        config : MonteCarloConfig
-            Simulation parameters.
-
-        Returns
-        -------
-        float
-            Estimated probability in ``[0.0, 1.0]``.
-
-        Raises
-        ------
-        pyopencl.Error
-            On any OpenCL runtime error.
-        """
+        """Estimate destruction probability for a single habitat via GPU."""
         p_host = np.ascontiguousarray(habitat.p_vec, dtype=np.float32)
-        count_host = np.zeros(1, dtype=np.int32)
 
-        wg = 256
-        padded = ((config.n_runs + wg - 1) // wg) * wg
+        topology = config.topology or self.suggest_topology(config.n_runs)
+        gws = topology.gws
+        lws = topology.lws
+        n_wg = gws // lws
 
         mf = cl.mem_flags
         p_buf: cl.Buffer | None = None
-        count_buf: cl.Buffer | None = None
+        partial_a: cl.Buffer | None = None
+        partial_b: cl.Buffer | None = None
         try:
             p_buf = cl.Buffer(
                 self._ctx,
                 mf.READ_ONLY | mf.COPY_HOST_PTR,
                 hostbuf=p_host,
             )
-            count_buf = cl.Buffer(
-                self._ctx,
-                mf.READ_WRITE | mf.COPY_HOST_PTR,
-                hostbuf=count_host,
+            partial_a = cl.Buffer(
+                self._ctx, mf.READ_WRITE, size=n_wg * 4
+            )
+            partial_b = cl.Buffer(
+                self._ctx, mf.READ_WRITE, size=max(1, n_wg) * 4
             )
 
             event = self._kernel(
                 self._queue,
-                (padded,),
-                (wg,),
+                (gws,),
+                (lws,),
                 p_buf,
-                count_buf,
+                partial_a,
                 np.uint32(habitat.n_cells),
                 np.float32(config.threshold),
                 np.uint64(int(config.seed)),
                 np.uint32(config.n_runs),
             )
 
-            cl.enqueue_copy(self._queue, count_host, count_buf)
-            self._queue.finish()
-
             if self._profiling:
+                event.wait()
                 elapsed_ms = (event.profile.end - event.profile.start) * 1e-6
-                # each of config.n_runs work-items reads all habitat.n_cells floats
-                bytes_transferred = 4 * habitat.n_cells * config.n_runs
                 self._last_n_cells = habitat.n_cells
-                self._kernel_launches.append((elapsed_ms, bytes_transferred))
-        finally:
-            if p_buf is not None:
-                p_buf.release()
-            if count_buf is not None:
-                count_buf.release()
+                self._last_n_wg = n_wg
+                total_bytes = self.get_bytes_read(
+                    habitat, config.n_runs
+                ) + self.get_bytes_written(habitat, config.n_runs)
+                self._kernel_launches.append((elapsed_ms, total_bytes))
 
-        prob = int(count_host[0]) / config.n_runs
+            total_count = self._reduce_partial(partial_a, partial_b, n_wg)
+        finally:
+            for buf in (p_buf, partial_a, partial_b):
+                if buf is not None:
+                    buf.release()
+
+        prob = total_count / config.n_runs
         logger.debug(
             "PyOpenCLMonteCarloAdapter: habitat '%s' — prob=%.4f "
             "(R=%d, N_c=%d, theta=%.3f).",
@@ -299,36 +324,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
         n_batches: int,
         callback: Callable[[int, int, float], None] | None = None,
     ) -> float:
-        """Estimate destruction probability using n_batches kernel launches.
-
-        Uploads ``habitat.p_vec`` once and keeps it in VRAM for all batches,
-        downloading only a single int32 per batch.
-
-        Parameters
-        ----------
-        habitat : CompactedHabitat
-            Pre-processed habitat.  ``habitat.n_cells`` must be > 0.
-        config : MonteCarloConfig
-            Simulation parameters.  ``config.n_runs`` must be divisible by
-            ``n_batches``.
-        n_batches : int
-            Number of kernel launches.
-        callback : callable, optional
-            Called after each batch as ``callback(batch_index, n_batches,
-            partial_prob)``.
-
-        Returns
-        -------
-        float
-            Estimated probability in ``[0.0, 1.0]``.
-
-        Raises
-        ------
-        ValueError
-            If ``config.n_runs`` is not divisible by ``n_batches``.
-        pyopencl.Error
-            On any OpenCL runtime error.
-        """
+        """Estimate destruction probability using n_batches kernel launches."""
         if config.n_runs % n_batches != 0:
             raise ValueError(
                 f"config.n_runs ({config.n_runs}) must be divisible by "
@@ -336,58 +332,66 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
             )
 
         batch_size = config.n_runs // n_batches
-        wg = 256
-        padded_batch = ((batch_size + wg - 1) // wg) * wg
         p_host = np.ascontiguousarray(habitat.p_vec, dtype=np.float32)
+
+        topology = config.topology or self.suggest_topology(batch_size)
+        gws = topology.gws
+        lws = topology.lws
+        n_wg = gws // lws
 
         mf = cl.mem_flags
         p_buf: cl.Buffer | None = None
+        partial_a: cl.Buffer | None = None
+        partial_b: cl.Buffer | None = None
         try:
             p_buf = cl.Buffer(
                 self._ctx,
                 mf.READ_ONLY | mf.COPY_HOST_PTR,
                 hostbuf=p_host,
             )
+            partial_a = cl.Buffer(
+                self._ctx, mf.READ_WRITE, size=n_wg * 4
+            )
+            partial_b = cl.Buffer(
+                self._ctx, mf.READ_WRITE, size=max(1, n_wg) * 4
+            )
 
             total_count = 0
             for i in range(n_batches):
-                count_host = np.zeros(1, dtype=np.int32)
-                count_buf = cl.Buffer(
-                    self._ctx,
-                    mf.READ_WRITE | mf.COPY_HOST_PTR,
-                    hostbuf=count_host,
+                event = self._kernel(
+                    self._queue,
+                    (gws,),
+                    (lws,),
+                    p_buf,
+                    partial_a,
+                    np.uint32(habitat.n_cells),
+                    np.float32(config.threshold),
+                    np.uint64(int(config.seed) + i * batch_size * habitat.n_cells),
+                    np.uint32(batch_size),
                 )
-                try:
-                    event = self._kernel(
-                        self._queue,
-                        (padded_batch,),
-                        (wg,),
-                        p_buf,
-                        count_buf,
-                        np.uint32(habitat.n_cells),
-                        np.float32(config.threshold),
-                        np.uint64(int(config.seed) + i * batch_size * habitat.n_cells),
-                        np.uint32(batch_size),
-                    )
-                    cl.enqueue_copy(self._queue, count_host, count_buf)
-                    self._queue.finish()
 
-                    if self._profiling:
-                        elapsed_ms = (event.profile.end - event.profile.start) * 1e-6
-                        bytes_transferred = 4 * habitat.n_cells * batch_size
-                        self._last_n_cells = habitat.n_cells
-                        self._kernel_launches.append((elapsed_ms, bytes_transferred))
-                finally:
-                    count_buf.release()
+                if self._profiling:
+                    event.wait()
+                    elapsed_ms = (
+                        event.profile.end - event.profile.start
+                    ) * 1e-6
+                    self._last_n_cells = habitat.n_cells
+                    self._last_n_wg = n_wg
+                    total_bytes = self.get_bytes_read(
+                        habitat, batch_size
+                    ) + self.get_bytes_written(habitat, batch_size)
+                    self._kernel_launches.append((elapsed_ms, total_bytes))
 
-                total_count += int(count_host[0])
+                batch_count = self._reduce_partial(partial_a, partial_b, n_wg)
+                total_count += batch_count
 
                 if callback is not None:
                     runs_so_far = (i + 1) * batch_size
                     callback(i, n_batches, total_count / runs_so_far)
         finally:
-            if p_buf is not None:
-                p_buf.release()
+            for buf in (p_buf, partial_a, partial_b):
+                if buf is not None:
+                    buf.release()
 
         prob = total_count / config.n_runs
         logger.debug(
@@ -405,17 +409,37 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
     def reset_profile(self) -> None:
         """Clear accumulated kernel timing data."""
         self._kernel_launches.clear()
+        self._reduce_launches.clear()
         self._last_n_cells = 0
+        self._last_n_wg = 0
+
+    def get_bytes_read(self, habitat: CompactedHabitat, n_runs: int) -> int:
+        """Bytes read by the sampling kernel.
+
+        Each trial iterates over all ``n_cells`` of ``p_vec`` inside
+        ``_count_invaded``, so the kernel issues ``n_runs * n_cells``
+        float32 loads. Every load counts at face value, regardless of
+        cache hits.
+        """
+        return n_runs * habitat.n_cells * 4
+
+    def get_bytes_written(self, habitat: CompactedHabitat, n_runs: int) -> int:
+        """Bytes written by the sampling kernel.
+
+        One int (4 B) per work-group is written to the partial buffer.
+        Bytes written by the recursive reducer are tracked separately in
+        ``self._reduce_launches``.
+        """
+        return self._last_n_wg * 4
 
     def benchmark(self) -> list[BenchResult]:
-        """Return timing and bandwidth statistics from real kernel executions.
+        """Return timing and bandwidth statistics for sampling + reduce.
 
-        Raises
-        ------
-        NotImplementedError
-            If the adapter was constructed without ``profiling=True``.
-        ValueError
-            If no kernel launches have been recorded yet.
+        Returns
+        -------
+        list[BenchResult]
+            One entry for the sampling kernel and (when reduce launches
+            were recorded) one entry for the recursive reducer.
         """
         if not self._profiling:
             raise NotImplementedError(
@@ -426,16 +450,39 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
                 "No kernel executions recorded yet. "
                 "Call run() or run_batched() at least once before benchmark()."
             )
-        times_ms = [t for t, _ in self._kernel_launches]
-        total_bytes = sum(b for _, b in self._kernel_launches)
-        total_time_s = sum(times_ms) * 1e-3
-        bandwidth_gbs = total_bytes / total_time_s / 1e9
-        return [BenchResult(
-            kernel_name=_KERNEL_NAME,
+
+        results: list[BenchResult] = []
+
+        sample_times = [t for t, _ in self._kernel_launches]
+        sample_bytes = sum(b for _, b in self._kernel_launches)
+        sample_time_s = sum(sample_times) * 1e-3
+        sample_bw = sample_bytes / sample_time_s / 1e9 if sample_time_s > 0 else 0.0
+        memory_mb = (self._last_n_cells * 4 + self._last_n_wg * 4 * 2) / 1e6
+        results.append(BenchResult(
+            kernel_name=self._SAMPLING_KERNEL_NAME,
             shape=(self._last_n_cells, 1),
             n_cells=self._last_n_cells,
-            n_runs=len(times_ms),
-            mean_ms=float(np.mean(times_ms)),
-            min_ms=float(np.min(times_ms)),
-            bandwidth_gbs=bandwidth_gbs,
-        )]
+            n_runs=len(sample_times),
+            mean_ms=float(np.mean(sample_times)),
+            min_ms=float(np.min(sample_times)),
+            bandwidth_gbs=sample_bw,
+            memory_mb=memory_mb,
+        ))
+
+        if self._reduce_launches:
+            r_times = [t for t, _ in self._reduce_launches]
+            r_bytes = sum(b for _, b in self._reduce_launches)
+            r_time_s = sum(r_times) * 1e-3
+            r_bw = r_bytes / r_time_s / 1e9 if r_time_s > 0 else 0.0
+            results.append(BenchResult(
+                kernel_name=_REDUCE_KERNEL_NAME,
+                shape=(self._last_n_wg, 1),
+                n_cells=self._last_n_wg,
+                n_runs=len(r_times),
+                mean_ms=float(np.mean(r_times)),
+                min_ms=float(np.min(r_times)),
+                bandwidth_gbs=r_bw,
+                memory_mb=self._last_n_wg * 4 * 2 / 1e6,
+            ))
+
+        return results

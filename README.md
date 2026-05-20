@@ -23,6 +23,14 @@ pip install -e .
 pytest tests/ --verbose
 ```
 
+## Running the Demo
+
+A Streamlit-based interactive demo is available to visualize habitats and run simulations with custom parameters:
+
+```bash
+streamlit run demo.py
+```
+
 ## Documentation
 
 - [docs/patterns.md](docs/patterns.md) — design patterns and architecture diagrams

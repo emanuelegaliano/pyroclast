@@ -52,9 +52,11 @@ static uint _count_invaded(__global const float* p_vec, uint n_cells,
 }
 
 static int _run_trial(__global const float* p_vec, uint n_cells,
-                      float threshold, ulong base_offset) {
+                      float threshold, ulong base_offset, uint r) {
     mwc64x_state_t rng;
-    MWC64X_SeedStreams(&rng, base_offset, (ulong)n_cells);
+    // We use r to uniquely identify the stream. By setting perStreamOffset to 0,
+    // we bypass the internal get_global_id(0) dependency of MWC64X_SeedStreams.
+    MWC64X_SeedStreams(&rng, base_offset + (ulong)r * (ulong)n_cells, 0);
     uint invaded = _count_invaded(p_vec, n_cells, &rng);
     return ((float)invaded / (float)n_cells) > threshold;
 }
@@ -80,24 +82,30 @@ static void _tree_reduce(__local int* scratch, uint lid) {
 __kernel __attribute__((reqd_work_group_size(WG_SIZE, 1, 1)))
 void monte_carlo_run(
     __global const float* p_vec,       /* compacted invasion probabilities, N_c floats */
-    __global int*         count,       /* output: single atomic counter, initialised to 0 by host */
+    __global int*         partial,     /* output: one int per work-group (n_wg slots) */
     const uint            n_cells,     /* N_c — number of active habitat cells */
     const float           threshold,   /* critical fraction theta */
     const ulong           base_offset, /* MWC64X stream base; separates runs and batches */
-    const uint            n_runs)      /* R — guard against padded work-items */
+    const uint            n_runs)      /* R — simulations to perform */
 {
-    uint r   = get_global_id(0);
     uint lid = get_local_id(0);
+    uint gsize = get_global_size(0);
 
-    int my_result = 0;
-    if (r < n_runs)
-        my_result = _run_trial(p_vec, n_cells, threshold, base_offset);
+    int private_sum = 0;
+    // Grid-stride loop: each work-item processes multiple runs if n_runs > gsize
+    for (uint r = get_global_id(0); r < n_runs; r += gsize) {
+        private_sum += _run_trial(p_vec, n_cells, threshold, base_offset, r);
+    }
 
     __local int scratch[WG_SIZE];
-    scratch[lid] = my_result;
+    scratch[lid] = private_sum;
     barrier(CLK_LOCAL_MEM_FENCE);
     _tree_reduce(scratch, lid);
 
-    if (lid == 0)
-        atomic_add(count, scratch[0]);
+    if (lid == 0) {
+        /* Bandwidth note: this single store is the only global memory write
+         * per work-group; the host closes the reduction with reduce_sum.cl.
+         */
+        partial[get_group_id(0)] = scratch[0];
+    }
 }

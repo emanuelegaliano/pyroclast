@@ -2,10 +2,13 @@
 
 import numpy as np
 import pytest
+from dotenv import load_dotenv
+import os
 
 from pyroclast import FileMapRepository, HabitatCriteria, InvasionCriteria
 
-DATA_DIR = "data"
+load_dotenv()
+DATA_DIR = os.getenv("DATA_PATH", "data")
 
 
 @pytest.fixture(scope="module")

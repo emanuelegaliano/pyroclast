@@ -14,7 +14,9 @@ from pyroclast.services.monte_carlo import run_monte_carlo, run_monte_carlo_batc
 
 # ---------------------------------------------------------------------------
 # Stubs
-# ---------------------------------------------------------------------------
+from pyroclast.domain.models import CompactedHabitat, GridTopology, MonteCarloConfig
+
+...
 
 class _FixedAdapter(IMonteCarloAdapter):
     """Adapter that always returns a fixed value and records calls."""
@@ -34,6 +36,14 @@ class _FixedAdapter(IMonteCarloAdapter):
     def run_batched(self, habitat, config, n_batches, callback=None) -> float:
         return self.run(habitat, config)
 
+    def suggest_topology(self, n_runs: int) -> GridTopology:
+        return GridTopology(gws=1024, lws=256)
+
+    def get_bytes_read(self, habitat: CompactedHabitat, n_runs: int) -> int:
+        return 0
+
+    def get_bytes_written(self, habitat: CompactedHabitat, n_runs: int) -> int:
+        return 0
 
 # ---------------------------------------------------------------------------
 # Fixtures

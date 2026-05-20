@@ -251,7 +251,14 @@ class FileMapStrategy(MapRepositoryStrategy):
             if not invasion_path.is_file():
                 raise FileNotFoundError(f"Invasion map not found: {invasion_path}")
         else:
-            invasion_candidates = sorted(self._root.glob("*.tif"))
+            invasion_candidates = sorted([
+                p for p in self._root.glob("*.tif")
+                if "DEM" not in p.name.upper()
+            ])
+            if not invasion_candidates:
+                # Fallback to any .tif if no non-DEM found
+                invasion_candidates = sorted(self._root.glob("*.tif"))
+
             if not invasion_candidates:
                 raise FileNotFoundError(f"No invasion map (.tif) found in {self._root}")
             invasion_path = invasion_candidates[0]

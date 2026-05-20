@@ -4,6 +4,6 @@ Contains pure Value Objects that represent the core concepts of the simulation.
 No infrastructure dependencies are allowed in this package.
 """
 
-from .models import CompactedHabitat, MonteCarloConfig
+from .models import CompactedHabitat, GridTopology, MonteCarloConfig
 
-__all__ = ["CompactedHabitat", "MonteCarloConfig"]
+__all__ = ["CompactedHabitat", "GridTopology", "MonteCarloConfig"]

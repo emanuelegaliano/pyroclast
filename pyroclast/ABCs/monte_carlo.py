@@ -26,7 +26,7 @@ pyroclast.domain.models.MonteCarloConfig : simulation parameters.
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
-from pyroclast.domain.models import BenchResult, CompactedHabitat, MonteCarloConfig
+from pyroclast.domain.models import BenchResult, CompactedHabitat, GridTopology, MonteCarloConfig
 
 
 class IMonteCarloAdapter(ABC):
@@ -133,6 +133,24 @@ class IMonteCarloAdapter(ABC):
             Estimated probability in :math:`[0.0, 1.0]`.
         """
 
+    @abstractmethod
+    def suggest_topology(self, n_runs: int) -> GridTopology:
+        """Suggest an optimal execution grid for the given number of runs.
+
+        The suggested topology should ideally saturate the GPU's compute units
+        while maintaining coalesced memory access.
+
+        Parameters
+        ----------
+        n_runs : int
+            Number of simulations to be executed.
+
+        Returns
+        -------
+        GridTopology
+            A recommended (GWS, LWS) configuration.
+        """
+
     def benchmark(self) -> list[BenchResult]:
         """Return timing and bandwidth statistics from real kernel executions.
 
@@ -154,3 +172,62 @@ class IMonteCarloAdapter(ABC):
         raise NotImplementedError(
             f"{type(self).__name__} does not support benchmark()."
         )
+
+    @abstractmethod
+    def get_bytes_read(self, habitat: CompactedHabitat, n_runs: int) -> int:
+        """Calculate the total number of bytes read from VRAM during kernel execution.
+
+        Parameters
+        ----------
+        habitat : CompactedHabitat
+            The pre-processed habitat.
+        n_runs : int
+            Number of simulations.
+
+        Returns
+        -------
+        int
+            Total bytes read from global memory.
+        """
+
+    @abstractmethod
+    def get_bytes_written(self, habitat: CompactedHabitat, n_runs: int) -> int:
+        """Calculate the total number of bytes written to VRAM during kernel execution.
+
+        Parameters
+        ----------
+        habitat : CompactedHabitat
+            The pre-processed habitat.
+        n_runs : int
+            Number of simulations.
+
+        Returns
+        -------
+        int
+            Total bytes written to global memory.
+        """
+
+    def get_bandwidth(
+        self,
+        habitat: CompactedHabitat,
+        n_runs: int,
+        time_s: float
+    ) -> float:
+        """Calculate the effective bandwidth in GB/s.
+
+        Parameters
+        ----------
+        habitat : CompactedHabitat
+            The pre-processed habitat.
+        n_runs : int
+            Number of simulations.
+        time_s : float
+            Execution time in seconds.
+
+        Returns
+        -------
+        float
+            Effective bandwidth in gigabytes per second (GB/s), using decimal base (10^9).
+        """
+        total_bytes = self.get_bytes_read(habitat, n_runs) + self.get_bytes_written(habitat, n_runs)
+        return total_bytes / time_s / 1e9

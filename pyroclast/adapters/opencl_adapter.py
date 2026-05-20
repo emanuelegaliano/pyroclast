@@ -172,7 +172,8 @@ class PyOpenCLAdapter(IComputeAdapter):
         self._queue: cl.CommandQueue = cl.CommandQueue(
             self._ctx, properties=queue_props
         )
-        self._kernel_times_ms: list[float] = []
+        # each entry: (elapsed_ms, total_bytes)
+        self._kernel_launches: list[tuple[float, int]] = []
         self._last_n_cells: int = 0
         self._last_shape: tuple[int, int] = (0, 0)
 
@@ -307,7 +308,12 @@ class PyOpenCLAdapter(IComputeAdapter):
                         elapsed_ms = (
                             event.profile.end - event.profile.start
                         ) * 1e-6
-                        self._kernel_times_ms.append(elapsed_ms)
+                        total_bytes = self.get_bytes_read(
+                            invasion_map, habitat
+                        ) + self.get_bytes_written(invasion_map, habitat)
+                        self._kernel_launches.append(
+                            (elapsed_ms, total_bytes)
+                        )
                 finally:
                     if h_buf is not None:
                         h_buf.release()
@@ -338,10 +344,24 @@ class PyOpenCLAdapter(IComputeAdapter):
 
     def reset_profile(self) -> None:
         """Clear accumulated kernel timing data."""
-        self._kernel_times_ms.clear()
+        self._kernel_launches.clear()
 
-    def benchmark(self) -> BenchResult:
+    def get_bytes_read(self, invasion_map: RasterMap, habitat: RasterMap) -> int:
+        """Calculate bytes read from VRAM (p_map + h_map)."""
+        return invasion_map.data.nbytes + habitat.data.nbytes
+
+    def get_bytes_written(self, invasion_map: RasterMap, habitat: RasterMap) -> int:
+        """Calculate bytes written to VRAM (out_map)."""
+        # out_map has the same shape and type as invasion_map.data
+        return invasion_map.data.nbytes
+
+    def benchmark(self) -> list[BenchResult]:
         """Return timing and bandwidth statistics from real kernel executions.
+
+        Returns
+        -------
+        list[BenchResult]
+            Timing and bandwidth statistics derived from real kernel launches.
 
         Raises
         ------
@@ -354,27 +374,30 @@ class PyOpenCLAdapter(IComputeAdapter):
             raise NotImplementedError(
                 "Profiling is disabled. Construct with profiling=True."
             )
-        if not self._kernel_times_ms:
+        if not self._kernel_launches:
             raise ValueError(
                 "No kernel executions recorded yet. "
                 "Call batch_preprocess() at least once before benchmark()."
             )
-        # reads: 4 B (float32 p_map) + 1 B (uint8 h_map); writes: 4 B (float32 out)
-        _BYTES_PER_CELL = 9
-        times = self._kernel_times_ms
-        mean_ms = float(np.mean(times))
-        min_ms = float(np.min(times))
-        # n_cells is the same for every launch (all habitats share the invasion map shape)
-        # infer it from the last recorded run via bandwidth formula inversion is not possible,
-        # so we store it alongside the times
-        n_cells = self._last_n_cells
-        bandwidth_gbs = (_BYTES_PER_CELL * n_cells) / (mean_ms * 1e-3) / 1e9
-        return BenchResult(
+
+        times_ms = [t for t, _ in self._kernel_launches]
+        mean_ms = float(np.mean(times_ms))
+        min_ms = float(np.min(times_ms))
+        
+        total_time_s = sum(times_ms) * 1e-3
+        total_bytes = sum(b for _, b in self._kernel_launches)
+        bandwidth_gbs = total_bytes / total_time_s / 1e9
+        
+        # Memory footprint in MB (Decimal: 10^6)
+        memory_mb = total_bytes / len(times_ms) / 1e6
+        
+        return [BenchResult(
             kernel_name=_KERNEL_NAME,
             shape=self._last_shape,
-            n_cells=n_cells,
-            n_runs=len(times),
+            n_cells=self._last_n_cells,
+            n_runs=len(times_ms),
             mean_ms=mean_ms,
             min_ms=min_ms,
             bandwidth_gbs=bandwidth_gbs,
-        )
+            memory_mb=memory_mb,
+        )]

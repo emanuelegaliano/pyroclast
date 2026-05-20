@@ -183,15 +183,71 @@ class BenchResult:
     mean_ms: float
     min_ms: float
     bandwidth_gbs: float
+    memory_mb: float
+
+
+@dataclass(frozen=True)
+class GridTopology:
+    """Immutable Value Object representing the OpenCL execution grid.
+
+    Parameters
+    ----------
+    gws : int or tuple[int, int]
+        Global Work Size (total number of work-items).
+    lws : int or tuple[int, int]
+        Local Work Size (number of work-items per work-group).
+    """
+
+    gws: int | tuple[int, int]
+    lws: int | tuple[int, int]
+
+    def __post_init__(self) -> None:
+        def _check_pos(v: int | tuple[int, ...], name: str) -> None:
+            if isinstance(v, int):
+                if v <= 0:
+                    raise ValueError(f"{name} must be positive, got {v}.")
+            else:
+                for x in v:
+                    if x <= 0:
+                        raise ValueError(
+                            f"{name} dimensions must be positive, got {v}."
+                        )
+
+        _check_pos(self.gws, "gws")
+        _check_pos(self.lws, "lws")
+
+        if isinstance(self.gws, int) != isinstance(self.lws, int):
+            raise ValueError("gws and lws must be both int or both tuple.")
+
+        if isinstance(self.gws, int):
+            assert isinstance(self.lws, int)
+            if self.gws % self.lws != 0:
+                raise ValueError(
+                    f"gws ({self.gws}) must be a multiple of lws ({self.lws})."
+                )
+        else:
+            assert isinstance(self.lws, tuple)
+            assert isinstance(self.gws, tuple)
+            if len(self.gws) != len(self.lws):
+                raise ValueError(
+                    f"gws and lws tuples must have same length, got "
+                    f"{len(self.gws)} and {len(self.lws)}."
+                )
+            for i, (g, l) in enumerate(zip(self.gws, self.lws)):
+                if g % l != 0:
+                    raise ValueError(
+                        f"gws dimension {i} ({g}) must be a multiple of "
+                        f"lws dimension {i} ({l})."
+                    )
 
 
 @dataclass(frozen=True)
 class MonteCarloConfig:
     """Immutable Value Object carrying the parameters for a Monte Carlo run.
 
-    Groups the three scalar parameters that govern a single Monte Carlo
-    experiment: the number of independent runs, the critical invasion
-    threshold, and the seed for reproducible random number generation.
+    Groups the parameters that govern a single Monte Carlo experiment: the
+    number of independent runs, the critical invasion threshold, the seed,
+    and the optional execution topology (GWS/LWS).
 
     Being a frozen dataclass, instances are safe to share across threads
     and to use as dictionary keys.
@@ -210,6 +266,9 @@ class MonteCarloConfig:
         :math:`0 \\leq \\text{seed} < 2^{32}` so that it fits in an OpenCL
         ``uint`` argument.  The same ``(seed, n_runs, threshold)`` triple
         always produces the same result.
+    topology : GridTopology or None, optional
+        Execution grid configuration (GWS and LWS). If None, the adapter
+        will choose a default topology.
 
     Raises
     ------
@@ -229,6 +288,7 @@ class MonteCarloConfig:
     n_runs: int
     threshold: float
     seed: int
+    topology: GridTopology | None = None
 
     def __post_init__(self) -> None:
         if self.n_runs <= 0:
