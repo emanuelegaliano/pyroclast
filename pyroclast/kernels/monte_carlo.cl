@@ -30,37 +30,12 @@
  * by 2^24 = 16777216 to produce a value in [0.0, 1.0).
  */
 
-#include "mwc64x/mwc64x_rng.cl"
+#include "misc.h"
 
-#define WG_SIZE 256
-
-static float _to_float(uint bits) {
-    return (float)(bits >> 8u) * (1.0f / 16777216.0f);
-}
-
-static uint _count_invaded(__global const float* p_vec, uint n_cells,
-                           mwc64x_state_t* rng) {
-    uint invaded = 0u;
-    for (uint k = 0u; k < n_cells; k++)
-        invaded += (uint)(_to_float(MWC64X_NextUint(rng)) <= p_vec[k]);
-    return invaded;
-}
-
-static int _run_trial(__global const float* p_vec, uint n_cells,
-                      float threshold, ulong base_offset, uint r) {
-    mwc64x_state_t rng;
-    /* perStreamOffset = 0 bypasses MWC64X's internal get_global_id(0)
-     * dependency, so r alone identifies the stream segment. */
-    MWC64X_SeedStreams(&rng, base_offset + (ulong)r * (ulong)n_cells, 0);
-    uint invaded = _count_invaded(p_vec, n_cells, &rng);
-    return ((float)invaded / (float)n_cells) > threshold;
-}
-
-
-/* Power-of-2 tree reduction over scratch[0..WG_SIZE-1] into scratch[0].
- * WG_SIZE must be a power of two. */
+/* Power-of-2 tree reduction over scratch[0..LWS-1] into scratch[0].
+ * The active work-group size (LWS) must be a power of two. */
 static void _tree_reduce(__local int* scratch, uint lid) {
-    for (uint stride = WG_SIZE >> 1; stride > 0; stride >>= 1) {
+    for (uint stride = get_local_size(0) >> 1; stride > 0; stride >>= 1) {
         if (lid < stride)
             scratch[lid] += scratch[lid + stride];
         barrier(CLK_LOCAL_MEM_FENCE);

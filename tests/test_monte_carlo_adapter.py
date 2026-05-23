@@ -135,3 +135,40 @@ class TestReproducibility:
         p_small = adapter.run(hab, _config(n_runs=100_000, threshold=0.0, seed=7))
         p_large = adapter.run(hab, _config(n_runs=400_000, threshold=0.0, seed=7))
         assert abs(p_small - p_large) < 0.02
+
+
+# ---------------------------------------------------------------------------
+# Dynamic Workgroup Size and Benchmarking
+# ---------------------------------------------------------------------------
+
+class TestDynamicWorkgroupSize:
+    @pytest.mark.parametrize("lws", [64, 128, 256, 512])
+    def test_run_with_arbitrary_lws(self, adapter, lws):
+        """Test that the 1D adapter can compile and execute correctly with arbitrary LWS."""
+        from pyroclast.domain.models import GridTopology
+        hab = _habitat([0.4, 0.6, 0.2, 0.8, 0.1, 0.9])
+        # Force a specific LWS and GWS (GWS must be a multiple of LWS)
+        topology = GridTopology(gws=lws * 4, lws=lws)
+        cfg = _config(seed=42)
+        cfg.topology = topology
+
+        # This will trigger compilation if needed, run successfully, and produce valid results
+        prob = adapter.run(hab, cfg)
+        assert 0.0 <= prob <= 1.0
+
+    def test_different_lws_yield_identical_results(self, adapter):
+        """Test that running with different LWS values yields the exact same bitwise probabilities."""
+        from pyroclast.domain.models import GridTopology
+        hab = _habitat([0.3, 0.7, 0.5, 0.1, 0.9])
+        cfg = _config(seed=1337)
+
+        # Run with LWS = 128
+        cfg.topology = GridTopology(gws=512, lws=128)
+        p_128 = adapter.run(hab, cfg)
+
+        # Run with LWS = 256
+        cfg.topology = GridTopology(gws=512, lws=256)
+        p_256 = adapter.run(hab, cfg)
+
+        assert p_128 == p_256
+

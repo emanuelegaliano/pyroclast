@@ -134,15 +134,18 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
         self._last_n_cells: int = 0
         self._last_n_wg: int = 0
 
-        mwc64x_include = (
+        self._kernel_path = kernel_path
+        self._mwc64x_include = (
             Path(__file__).parent.parent.parent / "mwc64x-v0" / "mwc64x" / "cl"
         )
+        self._kernel_dir = kernel_path.parent
+        self._compiled_wg_size = 256
 
         kernel_source = kernel_path.read_text(encoding="utf-8")
         try:
             self._program: cl.Program = cl.Program(
                 self._ctx, kernel_source
-            ).build(options=f"-I {mwc64x_include}")
+            ).build(options=f"-I {self._mwc64x_include} -I {self._kernel_dir} -DWG_SIZE={self._compiled_wg_size}")
         except cl.RuntimeError as exc:
             raise RuntimeError(
                 f"OpenCL kernel compilation failed.\n"
@@ -154,7 +157,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
         try:
             self._reduce_program: cl.Program = cl.Program(
                 self._ctx, reduce_source
-            ).build()
+            ).build(options=f"-DREDUCE_WG_SIZE={_REDUCE_LWS}")
         except cl.RuntimeError as exc:
             raise RuntimeError(
                 f"OpenCL reducer kernel compilation failed.\n"
@@ -173,6 +176,28 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
             self._SAMPLING_KERNEL_NAME,
             _REDUCE_KERNEL_NAME,
         )
+
+    def _recompile(self, wg_size: int) -> None:
+        """Recompile the sampling kernel dynamically for a new workgroup size."""
+        logger.info(
+            "PyOpenCLMonteCarloAdapter: Recompiling kernel dynamically for WG_SIZE=%d",
+            wg_size,
+        )
+        kernel_source = self._kernel_path.read_text(encoding="utf-8")
+        try:
+            self._program = cl.Program(
+                self._ctx, kernel_source
+            ).build(options=f"-I {self._mwc64x_include} -I {self._kernel_dir} -DWG_SIZE={wg_size}")
+        except cl.RuntimeError as exc:
+            raise RuntimeError(
+                f"OpenCL kernel dynamic recompilation failed.\n"
+                f"Kernel path: {self._kernel_path}\n"
+                f"Build log:\n{exc}"
+            ) from exc
+        self._kernel = cl.Kernel(
+            self._program, self._SAMPLING_KERNEL_NAME
+        )
+        self._compiled_wg_size = wg_size
 
     def suggest_topology(self, n_runs: int) -> GridTopology:
         """Suggest an execution grid that saturates the device."""
@@ -254,6 +279,8 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
         topology = config.topology or self.suggest_topology(config.n_runs)
         gws = topology.gws
         lws = topology.lws
+        if isinstance(lws, int) and lws != self._compiled_wg_size:
+            self._recompile(lws)
         n_wg = gws // lws
 
         mf = cl.mem_flags
@@ -333,6 +360,8 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
         topology = config.topology or self.suggest_topology(batch_size)
         gws = topology.gws
         lws = topology.lws
+        if isinstance(lws, int) and lws != self._compiled_wg_size:
+            self._recompile(lws)
         n_wg = gws // lws
 
         mf = cl.mem_flags

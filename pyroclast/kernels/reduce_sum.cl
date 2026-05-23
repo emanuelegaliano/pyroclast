@@ -13,8 +13,6 @@
  * (lid == 0) writes scratch[0] to out[group_id].
  */
 
-#define REDUCE_WG_SIZE 256
-
 __kernel __attribute__((reqd_work_group_size(REDUCE_WG_SIZE, 1, 1)))
 void reduce_sum_int(
     __global int* restrict       out,        /* [n_groups] */
@@ -34,7 +32,7 @@ void reduce_sum_int(
     scratch[lid] = val;
     barrier(CLK_LOCAL_MEM_FENCE);
 
-    for (uint stride = REDUCE_WG_SIZE >> 1; stride > 0; stride >>= 1) {
+    for (uint stride = get_local_size(0) >> 1; stride > 0; stride >>= 1) {
         if (lid < stride) {
             scratch[lid] += scratch[lid + stride];
         }

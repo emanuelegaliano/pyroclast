@@ -32,7 +32,7 @@ def reduce_runtime():
         Path(__file__).parent.parent
         / "pyroclast" / "kernels" / "reduce_sum.cl"
     )
-    program = cl.Program(ctx, src_path.read_text(encoding="utf-8")).build()
+    program = cl.Program(ctx, src_path.read_text(encoding="utf-8")).build(options=f"-DREDUCE_WG_SIZE={_REDUCE_LWS}")
     kernel = cl.Kernel(program, "reduce_sum_int")
     return ctx, queue, kernel
 
