@@ -3,36 +3,31 @@
  *
  * Compatible with OpenCL 1.2 and later; no extensions required.
  *
- * Algorithm (1-D NDRange, one work-item per run)
- * -----------------------------------------------
- * Global NDRange: ceil(n_runs / WG_SIZE) * WG_SIZE  (padded by host)
- * Local NDRange : WG_SIZE = 256
- * Each work-item r independently:
+ * Algorithm (1-D NDRange)
+ * -----------------------
+ * Local NDRange: WG_SIZE = 256. Each work-item processes one or more
+ * runs via a grid-stride loop; for each run r it:
  *   1. Seeds an MWC64X RNG at stream position base_offset + r*n_cells.
- *   2. Loops over the N_c compacted habitat cells in p_vec.
+ *   2. Iterates over the N_c compacted habitat cells in p_vec.
  *   3. For each cell k draws x ~ U(0,1) and tests x <= p_vec[k].
- *   4. Checks whether invaded_fraction > threshold.
- *   5. Contributes 1 or 0 to the work-group tree reduction.
+ *   4. Adds 1 to private_sum iff invaded_fraction > threshold.
  *
- * Tree reduction
- * --------------
- * Each work-item writes its result to scratch[lid].  Then the work-group
- * performs a standard power-of-2 tree reduction: at each step, the lower
- * half of active threads accumulates from the upper half, halving the
- * active count until scratch[0] holds the work-group total.  Thread 0
- * then issues a single atomic_add to the global counter.
- *
- * The host reads back one int32 (4 bytes) per kernel launch.
+ * The work-group then collapses private_sum across its 256 lanes with
+ * a power-of-2 tree reduction in local memory; thread 0 writes the
+ * group total to partial[get_group_id(0)]. The host closes the global
+ * reduction by launching reduce_sum.cl recursively until one int
+ * remains.
  *
  * RNG details
  * -----------
- * MWC64X (David Thomas, Imperial College) is a Multiply-With-Carry generator
- * with period 2^63, passing all TestU01 BigCrush tests.  MWC64X_SeedStreams()
- * positions each work-item at a non-overlapping stream via the skip-ahead
- * primitive; base_offset is controlled by the host to separate runs and batches.
+ * MWC64X (David Thomas, Imperial College) is a Multiply-With-Carry
+ * generator with period 2^63, passing all TestU01 BigCrush tests.
+ * MWC64X_SeedStreams() positions each work-item at a non-overlapping
+ * stream segment; base_offset is controlled by the host to separate
+ * batches across kernel launches.
  *
- * Float conversion: the top 24 bits of each 32-bit output are divided by
- * 2^24 = 16777216 to produce a value in [0.0, 1.0).
+ * Float conversion: the top 24 bits of each 32-bit output are divided
+ * by 2^24 = 16777216 to produce a value in [0.0, 1.0).
  */
 
 #include "mwc64x/mwc64x_rng.cl"
@@ -54,27 +49,20 @@ static uint _count_invaded(__global const float* p_vec, uint n_cells,
 static int _run_trial(__global const float* p_vec, uint n_cells,
                       float threshold, ulong base_offset, uint r) {
     mwc64x_state_t rng;
-    // We use r to uniquely identify the stream. By setting perStreamOffset to 0,
-    // we bypass the internal get_global_id(0) dependency of MWC64X_SeedStreams.
+    /* perStreamOffset = 0 bypasses MWC64X's internal get_global_id(0)
+     * dependency, so r alone identifies the stream segment. */
     MWC64X_SeedStreams(&rng, base_offset + (ulong)r * (ulong)n_cells, 0);
     uint invaded = _count_invaded(p_vec, n_cells, &rng);
     return ((float)invaded / (float)n_cells) > threshold;
 }
 
 
-/*
-    * Tree reduction: sums the WG_SIZE results in scratch[0..WG_SIZE-1] to
-    * scratch[0] using a power-of-2 tree reduction.  Each step, the lower half
-    * of active threads accumulates from the upper half, halving the active
-    * count until only thread 0 remains.
-    *
-    * Note: WG_SIZE must be a power of 2 for this to work correctly.
-*/
-
+/* Power-of-2 tree reduction over scratch[0..WG_SIZE-1] into scratch[0].
+ * WG_SIZE must be a power of two. */
 static void _tree_reduce(__local int* scratch, uint lid) {
-    for (uint stride = WG_SIZE >> 1; stride > 0; stride >>= 1) { // where >> is divide by 2 and >>= is divide by 2 and assign
+    for (uint stride = WG_SIZE >> 1; stride > 0; stride >>= 1) {
         if (lid < stride)
-            scratch[lid] += scratch[lid + stride]; // each thread in the lower half adds the corresponding value from the upper half
+            scratch[lid] += scratch[lid + stride];
         barrier(CLK_LOCAL_MEM_FENCE);
     }
 }
@@ -92,7 +80,6 @@ void monte_carlo_run(
     uint gsize = get_global_size(0);
 
     int private_sum = 0;
-    // Grid-stride loop: each work-item processes multiple runs if n_runs > gsize
     for (uint r = get_global_id(0); r < n_runs; r += gsize) {
         private_sum += _run_trial(p_vec, n_cells, threshold, base_offset, r);
     }
@@ -103,9 +90,6 @@ void monte_carlo_run(
     _tree_reduce(scratch, lid);
 
     if (lid == 0) {
-        /* Bandwidth note: this single store is the only global memory write
-         * per work-group; the host closes the reduction with reduce_sum.cl.
-         */
         partial[get_group_id(0)] = scratch[0];
     }
 }

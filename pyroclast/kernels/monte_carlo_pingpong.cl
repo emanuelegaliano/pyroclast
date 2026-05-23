@@ -1,14 +1,10 @@
 /*
  * monte_carlo_pingpong.cl — Monte Carlo kernel with ping-pong tree reduction.
  *
- * The work-group reduction alternates reads and writes between two local
- * scratch buffers (no in-place writes) and carries the running sum in a
- * private register. Three micro-optimisations combine in the loop body:
- *   - barrier at the top of the loop (one barrier per step, no separate
- *     initial barrier);
- *   - `val == src[lid]` invariant lets us load only the partner from local
- *     memory per step;
- *   - the final scalar lives in the register, no read-back from scratch.
+ * Same sampling as monte_carlo.cl. The work-group reduction alternates
+ * reads and writes between two local scratch buffers and carries the
+ * running sum in a private register `val`, with a single barrier at
+ * the top of each step.
  */
 
 #include "mwc64x/mwc64x_rng.cl"
@@ -30,8 +26,8 @@ static uint _count_invaded(__global const float* p_vec, uint n_cells,
 static int _run_trial(__global const float* p_vec, uint n_cells,
                       float threshold, ulong base_offset, uint r) {
     mwc64x_state_t rng;
-    // We use r to uniquely identify the stream. By setting perStreamOffset to 0,
-    // we bypass the internal get_global_id(0) dependency of MWC64X_SeedStreams.
+    /* perStreamOffset = 0 bypasses MWC64X's internal get_global_id(0)
+     * dependency, so r alone identifies the stream segment. */
     MWC64X_SeedStreams(&rng, base_offset + (ulong)r * (ulong)n_cells, 0);
     uint invaded = _count_invaded(p_vec, n_cells, &rng);
     return ((float)invaded / (float)n_cells) > threshold;
@@ -50,21 +46,14 @@ void monte_carlo_run(
     uint gsize = get_global_size(0);
 
     int private_sum = 0;
-    // Grid-stride loop: each work-item processes multiple runs if n_runs > gsize
     for (uint r = get_global_id(0); r < n_runs; r += gsize) {
         private_sum += _run_trial(p_vec, n_cells, threshold, base_offset, r);
     }
 
-    // Ping-pong reduction using two buffers and a private register
-    // accumulator `val`. Three micro-optimisations rolled into one body:
-    //   (i)  barrier at the TOP of the loop, so the same barrier publishes
-    //        the previous step's writes AND fences this step's reads —
-    //        no separate initial barrier is needed.
-    //   (ii) `val` carries the running sum across steps in a register; the
-    //        invariant `val == src[lid]` holds for every active lane at
-    //        the top of each iteration, so only ONE load from local memory
-    //        is required per step (the partner at src[lid + stride]).
-    //   (iii) the final write reads `val` directly, not src[0].
+    /* Invariant at the top of each iteration: val == src[lid] for every
+     * active lane, so the step only needs to load the partner from local
+     * memory. The barrier at the top of the loop also publishes the
+     * initial write of private_sum into scratch1. */
     __local int scratch1[WG_SIZE];
     __local int scratch2[WG_SIZE / 2];
 

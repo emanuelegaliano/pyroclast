@@ -1,8 +1,8 @@
-"""PyOpenCL 2-D Ping-Pong Monte Carlo Adapter.
+"""PyOpenCL 2-D Two-Barriers Monte Carlo Adapter.
 
-Adapter for the ``monte_carlo_2d_pingpong.cl`` kernel: 2-D NDRange with
-grid-stride sampling and a ping-pong tree reduction over two local scratch
-buffers in two phases (along x, then along y).
+Adapter for the ``monte_carlo_2d_two_barriers.cl`` kernel: 2-D NDRange
+with grid-stride sampling and an in-place two-phase reduction (x then y)
+over a single local scratch buffer, with two barriers per step.
 """
 
 from __future__ import annotations
@@ -20,10 +20,10 @@ from pyroclast.domain.models import CompactedHabitat, GridTopology, MonteCarloCo
 logger = logging.getLogger(__name__)
 
 
-class PyOpenCLMonteCarlo2DPingPongAdapter(PyOpenCLMonteCarloAdapter):
-    """Adapter for the 2-D ping-pong Monte Carlo sampling kernel."""
+class PyOpenCLMonteCarlo2DTwoBarriersAdapter(PyOpenCLMonteCarloAdapter):
+    """Adapter for the 2-D two-barriers Monte Carlo sampling kernel."""
 
-    _SAMPLING_KERNEL_NAME = "monte_carlo_2d_pingpong"
+    _SAMPLING_KERNEL_NAME = "monte_carlo_2d_two_barriers"
 
     def __init__(
         self,
@@ -32,7 +32,7 @@ class PyOpenCLMonteCarlo2DPingPongAdapter(PyOpenCLMonteCarloAdapter):
     ) -> None:
         if kernel_path is None:
             kernel_path = (
-                Path(__file__).parent.parent / "kernels" / "monte_carlo_2d_pingpong.cl"
+                Path(__file__).parent.parent / "kernels" / "monte_carlo_2d_two_barriers.cl"
             )
         super().__init__(kernel_path=kernel_path, profiling=profiling)
 
@@ -41,7 +41,7 @@ class PyOpenCLMonteCarlo2DPingPongAdapter(PyOpenCLMonteCarloAdapter):
         device = self._ctx.devices[0]
         max_cu = device.max_compute_units
 
-        lws = (32, 8)
+        lws = (32, 8)  # wg_size = 256
         n_wgs_x = max_cu * 4
         n_wgs_y = 2
 
@@ -81,7 +81,7 @@ class PyOpenCLMonteCarlo2DPingPongAdapter(PyOpenCLMonteCarloAdapter):
         habitat: CompactedHabitat,
         config: MonteCarloConfig,
     ) -> float:
-        """Execute the 2-D ping-pong kernel followed by the recursive reduce."""
+        """Execute the 2-D two-barriers kernel followed by the recursive reduce."""
         p_host = np.ascontiguousarray(habitat.p_vec, dtype=np.float32)
 
         topology = config.topology or self.suggest_topology(config.n_runs)
@@ -103,6 +103,7 @@ class PyOpenCLMonteCarlo2DPingPongAdapter(PyOpenCLMonteCarloAdapter):
             )
             partial_a, partial_b = self._allocate_partial_buffers(n_wg)
 
+            # Note: Only ONE local memory allocation of size wg_size*4
             event = self._kernel(
                 self._queue,
                 gws_arg,
@@ -114,7 +115,6 @@ class PyOpenCLMonteCarlo2DPingPongAdapter(PyOpenCLMonteCarloAdapter):
                 np.uint64(int(config.seed)),
                 np.uint32(config.n_runs),
                 cl.LocalMemory(4 * wg_size),
-                cl.LocalMemory(4 * (wg_size // 2)),
             )
 
             if self._profiling:
@@ -184,7 +184,6 @@ class PyOpenCLMonteCarlo2DPingPongAdapter(PyOpenCLMonteCarloAdapter):
                     np.uint64(int(config.seed) + i * batch_size * habitat.n_cells),
                     np.uint32(batch_size),
                     cl.LocalMemory(4 * wg_size),
-                    cl.LocalMemory(4 * (wg_size // 2)),
                 )
                 if self._profiling:
                     event.wait()

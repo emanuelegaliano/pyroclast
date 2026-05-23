@@ -1,12 +1,9 @@
 /*
  * monte_carlo_2d_stride.cl — 2-D Monte Carlo kernel with grid-stride sampling.
  *
- * Simplification of monte_carlo_2d_pingpong.cl: same 2-D NDRange and same
- * 2-D grid-stride sampling loop, but the work-group reduction collapses the
- * 2-D scratch grid into a single linearised array (lid = ly * lws_x + lx)
- * and runs an in-place sequential-addressing tree. One local buffer instead
- * of two, at the price of a less unrollable reduction with a RAW dependency
- * between steps. The bank-conflict-free access pattern is preserved.
+ * 2-D NDRange + 2-D grid-stride sampling loop. The work-group reduction
+ * linearises (ly, lx) into a single scratch buffer with lid = ly*lws_x + lx
+ * and runs an in-place sequential-addressing tree reduction.
  */
 
 #include "mwc64x/mwc64x_rng.cl"
@@ -26,7 +23,8 @@ static uint _count_invaded(__global const float* p_vec, uint n_cells,
 static int _run_trial(__global const float* p_vec, uint n_cells,
                       float threshold, ulong base_offset, uint r) {
     mwc64x_state_t rng;
-    // Each run r uses a unique non-overlapping stream segment.
+    /* perStreamOffset = 0 bypasses MWC64X's internal get_global_id(0)
+     * dependency, so r alone identifies the stream segment. */
     MWC64X_SeedStreams(&rng, base_offset + (ulong)r * (ulong)n_cells, 0);
     uint invaded = _count_invaded(p_vec, n_cells, &rng);
     return ((float)invaded / (float)n_cells) > threshold;
@@ -41,7 +39,7 @@ __kernel void monte_carlo_2d_stride(
     const uint            n_runs,      /* total simulations to perform */
     __local int*          scratch)     /* shared memory for reduction */
 {
-    // 1. 2D Indices and Linearization
+    /* 1. 2-D indices and linearisation */
     const uint lx = get_local_id(0);
     const uint ly = get_local_id(1);
     const uint lw = get_local_size(0);
@@ -57,17 +55,17 @@ __kernel void monte_carlo_2d_stride(
     const uint wg_size = lw * lh;
     const uint total_threads = gw * gh;
 
-    // 2. Grid-Stride Loop (Global Sliding Window)
+    /* 2. 2-D grid-stride loop */
     int private_sum = 0;
     for (uint r = gid; r < n_runs; r += total_threads) {
         private_sum += _run_trial(p_vec, n_cells, threshold, base_offset, r);
     }
 
-    // 3. Sequential Addressing Reduction (Bank-Conflict Free)
+    /* 3. Sequential-addressing tree reduction (contiguous active lanes,
+     *    bank-conflict free). */
     scratch[lid] = private_sum;
     barrier(CLK_LOCAL_MEM_FENCE);
 
-    // Reduction tree: contiguous addressing avoids bank conflicts
     for (uint active = wg_size >> 1; active > 0; active >>= 1) {
         if (lid < active) {
             scratch[lid] += scratch[lid + active];
@@ -75,8 +73,7 @@ __kernel void monte_carlo_2d_stride(
         barrier(CLK_LOCAL_MEM_FENCE);
     }
 
-    // 4. Write the work-group partial. The recursive reducer (reduce_sum.cl)
-    //    consumes this array on the next launch.
+    /* 4. One global store per work-group, linearised group id. */
     if (lid == 0) {
         const uint group_lin = get_group_id(1) * get_num_groups(0)
                              + get_group_id(0);

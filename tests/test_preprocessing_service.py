@@ -44,6 +44,12 @@ class _StubCompute(IComputeAdapter):
             for h in habitats
         ]
 
+    def get_bytes_read(self, invasion_map, habitat) -> int:
+        return 0
+
+    def get_bytes_written(self, invasion_map, habitat) -> int:
+        return 0
+
 
 @pytest.fixture
 def tmp(tmp_path):
@@ -98,6 +104,12 @@ class TestRunPreprocessingBatch:
         class _FixedCompute(IComputeAdapter):
             def batch_preprocess(self, invasion_map, habitats):
                 return [CompactedHabitat(habitat_code=habitats[0].code, n_cells=2, p_vec=p.copy())]
+
+            def get_bytes_read(self, invasion_map, habitat) -> int:
+                return 0
+
+            def get_bytes_written(self, invasion_map, habitat) -> int:
+                return 0
 
         repo = _StubRepo([_invasion(), _habitat("A")])
         run_preprocessing_batch(repo, _FixedCompute(), HabitatCriteria(), tmp)

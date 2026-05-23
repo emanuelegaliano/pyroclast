@@ -1,8 +1,7 @@
-"""PyOpenCL Monte Carlo Ping-Pong Adapter — optimized GPU reduction.
+"""PyOpenCL Monte Carlo Ping-Pong Adapter.
 
-This adapter uses the ``monte_carlo_pingpong.cl`` kernel, which implements
-a tree reduction using two local memory arrays (ping-pong) to potentially
-improve performance by avoiding some shared memory conflicts.
+Adapter for the ``monte_carlo_pingpong.cl`` kernel (ping-pong tree
+reduction over two local scratch buffers).
 """
 
 from __future__ import annotations
@@ -15,11 +14,7 @@ from pyroclast.adapters.opencl_mc_adapter import PyOpenCLMonteCarloAdapter
 logger = logging.getLogger(__name__)
 
 class PyOpenCLMonteCarloPingPongAdapter(PyOpenCLMonteCarloAdapter):
-    """GPU Monte Carlo adapter using an optimized ping-pong reduction kernel.
-
-    Inherits from ``PyOpenCLMonteCarloAdapter`` but defaults to the
-    ``monte_carlo_pingpong.cl`` kernel.
-    """
+    """Adapter defaulting to the ``monte_carlo_pingpong.cl`` sampling kernel."""
 
     def __init__(
         self,

@@ -1,11 +1,8 @@
 """PyOpenCL 2-D Grid-Stride Monte Carlo Adapter.
 
-Simplification of :class:`PyOpenCLMonteCarlo2DPingPongAdapter`: same 2-D
-execution grid and same 2-D grid-stride sampling, but the work-group
-reduction linearises lid into a single scratch buffer and runs an in-place
-sequential-addressing tree (one ``cl.LocalMemory`` argument instead of
-two). The host-side recursive ``reduce_sum_int`` reducer is shared with
-the other variants and collapses the partials to a single int.
+Adapter for the ``monte_carlo_2d_stride.cl`` kernel: 2-D NDRange with
+grid-stride sampling and an in-place sequential-addressing tree reduction
+over a single linearised local scratch buffer.
 """
 
 from __future__ import annotations

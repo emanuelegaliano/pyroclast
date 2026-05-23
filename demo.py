@@ -17,6 +17,10 @@ from pyroclast import (
     InvasionCriteria,
     PyOpenCLAdapter,
     PyOpenCLMonteCarloAdapter,
+    PyOpenCLMonteCarloPingPongAdapter,
+    PyOpenCLMonteCarlo2DAdapter,
+    PyOpenCLMonteCarlo2DPingPongAdapter,
+    PyOpenCLMonteCarlo2DTwoBarriersAdapter,
 )
 from pyroclast.domain.models import MonteCarloConfig
 from pyroclast.services import run_preprocessing_batch
@@ -78,6 +82,19 @@ mc_threshold = float(st.sidebar.number_input("Threshold (θ)", value=0.005, form
 mc_seed = int(st.sidebar.number_input("Random Seed", value=42, help="Il seed inizializza il generatore di numeri casuali MWC64X. Usare lo stesso seed permette di replicare esattamente gli stessi risultati."))
 mc_batches = int(st.sidebar.number_input("Batches", value=10, min_value=1))
 
+# Choose Monte Carlo Kernel/Adapter
+mc_adapter_choice = st.sidebar.selectbox(
+    "Kernel Variant",
+    options=[
+        "Standard (1-D)",
+        "Ping-Pong (1-D)",
+        "Grid-Stride (2-D)",
+        "Ping-Pong (2-D)",
+        "Two-Barriers (2-D)",
+    ],
+    index=0
+)
+
 st.sidebar.markdown("---")
 if st.sidebar.button("Clear Cache"):
     st.cache_data.clear()
@@ -86,16 +103,27 @@ if st.sidebar.button("Clear Cache"):
 
 # ── 4. Main App Logic ─────────────────────────────────────────
 st.title("Monte Carlo GPU Simulation")
-st.markdown("""
+st.markdown(f"""
 Questa demo esegue la simulazione Monte Carlo per il calcolo della probabilità di distruzione 
-degli habitat a causa della colata lavica, utilizzando il kernel **Standard** su GPU.
+degli habitat a causa della colata lavica, utilizzando il kernel **{mc_adapter_choice}** su GPU.
 """)
 
+_MC_CHOICES = {
+    "Standard (1-D)": PyOpenCLMonteCarloAdapter,
+    "Ping-Pong (1-D)": PyOpenCLMonteCarloPingPongAdapter,
+    "Grid-Stride (2-D)": PyOpenCLMonteCarlo2DAdapter,
+    "Ping-Pong (2-D)": PyOpenCLMonteCarlo2DPingPongAdapter,
+    "Two-Barriers (2-D)": PyOpenCLMonteCarlo2DTwoBarriersAdapter,
+}
+
 @st.cache_resource
-def get_adapters():
-    preprocess_adapter = PyOpenCLAdapter()
-    mc_adapter = PyOpenCLMonteCarloAdapter(profiling=True)
-    return preprocess_adapter, mc_adapter
+def get_preprocess_adapter():
+    return PyOpenCLAdapter()
+
+@st.cache_resource
+def get_mc_adapter(choice: str):
+    adapter_cls = _MC_CHOICES[choice]
+    return adapter_cls(profiling=True)
 
 @st.cache_data
 def load_data(path, invasion_map_path):
@@ -105,7 +133,8 @@ def load_data(path, invasion_map_path):
     return repo, habitats, invasion
 
 try:
-    preprocess_adapter, mc_adapter = get_adapters()
+    preprocess_adapter = get_preprocess_adapter()
+    mc_adapter = get_mc_adapter(mc_adapter_choice)
     repo, habitats, invasion = load_data(data_path, invasion_map_env)
     
     all_codes = [h.code for h in habitats]

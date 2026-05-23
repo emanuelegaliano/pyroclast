@@ -14,19 +14,19 @@ import numpy as np
 import pytest
 
 from pyroclast.adapters.opencl_mc_adapter import PyOpenCLMonteCarloAdapter
-from pyroclast.adapters.opencl_mc_cascading_adapter import PyOpenCLMonteCarloCascadingAdapter
 from pyroclast.adapters.opencl_mc_pingpong_adapter import PyOpenCLMonteCarloPingPongAdapter
 from pyroclast.adapters.opencl_mc_2d_stride_adapter import PyOpenCLMonteCarlo2DAdapter
 from pyroclast.adapters.opencl_mc_2d_pingpong_adapter import PyOpenCLMonteCarlo2DPingPongAdapter
+from pyroclast.adapters.opencl_mc_2d_two_barriers_adapter import PyOpenCLMonteCarlo2DTwoBarriersAdapter
 from pyroclast.domain.models import CompactedHabitat, MonteCarloConfig
 
 
 _ADAPTER_FACTORIES = [
     PyOpenCLMonteCarloAdapter,
     PyOpenCLMonteCarloPingPongAdapter,
-    PyOpenCLMonteCarloCascadingAdapter,
     PyOpenCLMonteCarlo2DAdapter,
     PyOpenCLMonteCarlo2DPingPongAdapter,
+    PyOpenCLMonteCarlo2DTwoBarriersAdapter,
 ]
 
 

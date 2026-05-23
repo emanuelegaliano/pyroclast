@@ -9,9 +9,9 @@ from pyroclast import (
     PyOpenCLAdapter,
     PyOpenCLMonteCarloAdapter,
     PyOpenCLMonteCarloPingPongAdapter,
-    PyOpenCLMonteCarloCascadingAdapter,
     PyOpenCLMonteCarlo2DAdapter,
     PyOpenCLMonteCarlo2DPingPongAdapter,
+    PyOpenCLMonteCarlo2DTwoBarriersAdapter,
 )
 from pyroclast.domain.models import BenchResult, MonteCarloConfig
 from pyroclast.services import run_preprocessing_batch
@@ -42,8 +42,11 @@ def _run_mc(adapter, label, compacted, config, n_batches) -> list[BenchResult]:
     for habitat in compacted:
         def _progress(i, total, p, code=habitat.habitat_code):
             print(f"  [{code}]  {(i + 1) * 100 // total:3d}%  p≈{p:.4f}", end="\r", flush=True)
-        prob = adapter.run_batched(habitat, config, n_batches, callback=_progress)
-        print(f"  [{habitat.habitat_code}]  P(fraction > {config.threshold}) = {prob:.6f}    ")
+        try:
+            prob = adapter.run_batched(habitat, config, n_batches, callback=_progress)
+            print(f"  [{habitat.habitat_code}]  P(fraction > {config.threshold}) = {prob:.6f}    ")
+        except ValueError as exc:
+            print(f"  [{habitat.habitat_code}]  SKIPPED: {exc}")
     return adapter.benchmark()
 
 
@@ -88,10 +91,6 @@ def main() -> None:
     mc_pp = PyOpenCLMonteCarloPingPongAdapter(profiling=True)
     bench_pp = _run_mc(mc_pp, "V2 Ping-Pong", compacted, mc_config, n_batches)
 
-    # ── V3 Cascading ─────────────────────────────────────────────
-    mc_cas = PyOpenCLMonteCarloCascadingAdapter(profiling=True)
-    bench_cas = _run_mc(mc_cas, "V3 Cascading", compacted, mc_config, n_batches)
-
     # ── V4 2-D Grid-Stride ───────────────────────────────────────
     mc_2d = PyOpenCLMonteCarlo2DAdapter(profiling=True)
     bench_2d = _run_mc(mc_2d, "V4 2-D Grid-Stride", compacted, mc_config, n_batches)
@@ -100,32 +99,39 @@ def main() -> None:
     mc_2d_pp = PyOpenCLMonteCarlo2DPingPongAdapter(profiling=True)
     bench_2d_pp = _run_mc(mc_2d_pp, "V5 2-D Ping-Pong", compacted, mc_config, n_batches)
 
+    # ── V6 2-D Two-Barriers ──────────────────────────────────────
+    mc_2d_2b = PyOpenCLMonteCarlo2DTwoBarriersAdapter(profiling=True)
+    bench_2d_2b = _run_mc(mc_2d_2b, "V6 2-D Two-Barriers", compacted, mc_config, n_batches)
+
     # ── Benchmark comparison ─────────────────────────────────────
     section("Benchmark comparison")
     all_runs = [
         ("V1 Standard",     bench_std),
         ("V2 Ping-Pong",    bench_pp),
-        ("V3 Cascading",    bench_cas),
         ("V4 2-D Stride",   bench_2d),
         ("V5 2-D Ping-Pong", bench_2d_pp),
+        ("V6 2-D Two-Barriers", bench_2d_2b),
     ]
 
-    if all(b for _, b in all_runs):
-        for label, bench in all_runs:
+    for label, bench in all_runs:
+        if bench:
             print(f"\n  [ {label} ]")
             _print_bench(bench)
+        else:
+            print(f"\n  [ {label} ] - SKIPPED or NO DATA")
 
-        def _total_ms(bench: list[BenchResult]) -> float:
-            return sum(b.mean_ms for b in bench)
+    def _total_ms(bench: list[BenchResult]) -> float:
+        return sum(b.mean_ms for b in bench)
 
-        total_std = _total_ms(bench_std)
-        print("\n  Total mean ms (sampling + reduce):")
-        for label, bench in all_runs:
+    total_std = _total_ms(bench_std)
+    print("\n  Total mean ms (sampling + reduce):")
+    for label, bench in all_runs:
+        if bench:
             total = _total_ms(bench)
             speedup = total_std / total if total > 0 else float("nan")
             print(f"    {label:<16}: {total:7.3f} ms   ({speedup:.2f}x vs V1)")
-    else:
-        print("\n  Benchmark comparison skipped (not all kernels processed).")
+        else:
+            print(f"    {label:<16}: SKIPPED")
 
 
 if __name__ == "__main__":

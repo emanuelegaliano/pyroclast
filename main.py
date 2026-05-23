@@ -9,11 +9,23 @@ from pyroclast import (
     HabitatCriteria,
     InvasionCriteria,
     PyOpenCLAdapter,
+    PyOpenCLMonteCarloAdapter,
+    PyOpenCLMonteCarloPingPongAdapter,
+    PyOpenCLMonteCarlo2DAdapter,
+    PyOpenCLMonteCarlo2DPingPongAdapter,
+    PyOpenCLMonteCarlo2DTwoBarriersAdapter,
 )
-from pyroclast.adapters.opencl_mc_adapter import PyOpenCLMonteCarloAdapter
 from pyroclast.domain.models import MonteCarloConfig
 from pyroclast.services import run_preprocessing_batch
 from pyroclast.services.monte_carlo import run_monte_carlo_batch
+
+_MC_ADAPTER_MAP = {
+    "standard": PyOpenCLMonteCarloAdapter,
+    "ping_pong": PyOpenCLMonteCarloPingPongAdapter,
+    "2d_stride": PyOpenCLMonteCarlo2DAdapter,
+    "2d_ping_pong": PyOpenCLMonteCarlo2DPingPongAdapter,
+    "2d_two_barriers": PyOpenCLMonteCarlo2DTwoBarriersAdapter,
+}
 
 
 def section(title: str) -> None:
@@ -102,7 +114,15 @@ def main() -> None:
 
     # ── 6. Monte Carlo simulation ────────────────────────────────
     section("6. Monte Carlo — destruction probability per habitat")
-    mc_adapter = PyOpenCLMonteCarloAdapter(profiling=True)
+    adapter_name = os.getenv("MC_ADAPTER", "standard").strip().lower()
+    adapter_cls = _MC_ADAPTER_MAP.get(adapter_name)
+    if adapter_cls is None:
+        raise ValueError(
+            f"Unknown MC_ADAPTER value '{adapter_name}'. "
+            f"Choose from: {list(_MC_ADAPTER_MAP.keys())}"
+        )
+    print(f"Using adapter: {adapter_cls.__name__}")
+    mc_adapter = adapter_cls(profiling=True)
     mc_config = MonteCarloConfig(
         n_runs=int(os.getenv("MC_RUNS", "1000000000")),
         threshold=float(os.getenv("MC_THRESHOLD", "0.005")),
@@ -114,27 +134,34 @@ def main() -> None:
     for habitat in compacted:
         def _progress(i, total, p, code=habitat.habitat_code):
             print(f"  [{code}]  {(i + 1) * 100 // total:3d}%  p≈{p:.4f}", end="\r", flush=True)
-        prob = mc_adapter.run_batched(habitat, mc_config, n_batches, callback=_progress)
-        print(f"  [{habitat.habitat_code}]  P(invaded_fraction > {mc_config.threshold}) = {prob:.4f}    ")
+        try:
+            prob = mc_adapter.run_batched(habitat, mc_config, n_batches, callback=_progress)
+            print(f"  [{habitat.habitat_code}]  P(invaded_fraction > {mc_config.threshold}) = {prob:.4f}    ")
+        except ValueError as exc:
+            print(f"  [{habitat.habitat_code}]  SKIPPED: {exc}")
 
     # ── 7. Kernel benchmark ──────────────────────────────────────
     section("7. Kernel benchmark")
     preprocess_bench = adapter.benchmark()
-    print(f"  kernel      : {preprocess_bench.kernel_name}")
-    print(f"  shape       : {preprocess_bench.shape[0]} x {preprocess_bench.shape[1]}  ({preprocess_bench.n_cells:,} cells)")
-    print(f"  launches    : {preprocess_bench.n_runs}")
-    print(f"  time (mean) : {preprocess_bench.mean_ms:.3f} ms")
-    print(f"  time (min)  : {preprocess_bench.min_ms:.3f} ms")
-    print(f"  bandwidth   : {preprocess_bench.bandwidth_gbs:.2f} GB/s", end="\n\n")
+    for pb in (preprocess_bench if isinstance(preprocess_bench, list) else [preprocess_bench]):
+        print(f"  kernel      : {pb.kernel_name}")
+        print(f"  shape       : {pb.shape[0]} x {pb.shape[1]}  ({pb.n_cells:,} cells)")
+        print(f"  launches    : {pb.n_runs}")
+        print(f"  time (mean) : {pb.mean_ms:.3f} ms")
+        print(f"  time (min)  : {pb.min_ms:.3f} ms")
+        print(f"  bandwidth   : {pb.bandwidth_gbs:.2f} GB/s", end="\n\n")
 
-    for mc_bench in mc_adapter.benchmark():
-        print(f"  kernel      : {mc_bench.kernel_name}")
-        print(f"  shape       : {mc_bench.shape[0]} x {mc_bench.shape[1]}  ({mc_bench.n_cells:,} cells)")
-        print(f"  launches    : {mc_bench.n_runs}")
-        print(f"  time (mean) : {mc_bench.mean_ms:.3f} ms")
-        print(f"  time (min)  : {mc_bench.min_ms:.3f} ms")
-        print(f"  bandwidth   : {mc_bench.bandwidth_gbs:.2f} GB/s")
-        print()
+    try:
+        for mc_bench in mc_adapter.benchmark():
+            print(f"  kernel      : {mc_bench.kernel_name}")
+            print(f"  shape       : {mc_bench.shape[0]} x {mc_bench.shape[1]}  ({mc_bench.n_cells:,} cells)")
+            print(f"  launches    : {mc_bench.n_runs}")
+            print(f"  time (mean) : {mc_bench.mean_ms:.3f} ms")
+            print(f"  time (min)  : {mc_bench.min_ms:.3f} ms")
+            print(f"  bandwidth   : {mc_bench.bandwidth_gbs:.2f} GB/s")
+            print()
+    except ValueError as exc:
+        print(f"  [Monte Carlo Benchmark] SKIPPED: {exc}")
 
 
 if __name__ == "__main__":

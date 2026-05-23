@@ -89,10 +89,6 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
     3. Compilation of the sampling kernel (``monte_carlo.cl`` by default).
     4. Compilation of the shared ``reduce_sum.cl`` reducer.
 
-    The reducer is held on ``self._reduce_kernel`` and shared across all
-    subclasses. Subclasses that override the sampling kernel path
-    automatically pick up the same recursive-reduction orchestration.
-
     Subclasses with a different OpenCL kernel function name should set
     ``_SAMPLING_KERNEL_NAME`` accordingly.
     """
