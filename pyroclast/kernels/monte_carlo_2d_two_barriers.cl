@@ -19,7 +19,7 @@ __kernel void monte_carlo_2d_two_barriers(
     const uint            n_runs,
     __local int*          scratch)    /* lws_x * lws_y ints */
 {
-    /* 1. 2-D indices */
+    // 1. 2-D indices 
     const uint lx = get_local_id(0);
     const uint ly = get_local_id(1);
     const uint lw = get_local_size(0);
@@ -33,13 +33,13 @@ __kernel void monte_carlo_2d_two_barriers(
     const uint gid = gy * gw + gx;
     const uint total_threads = gw * gh;
 
-    /* 2. 2-D grid-stride loop */
+    // 2. 2-D grid-stride loop 
     int private_sum = 0;
     for (uint r = gid; r < n_runs; r += total_threads) {
         private_sum += _run_trial(p_vec, n_cells, threshold, base_offset, r);
     }
 
-    /* 3. Publish to scratch */
+    // 3. Publish to scratch
     const uint lid = ly * lw + lx;
     scratch[lid] = private_sum;
     barrier(CLK_LOCAL_MEM_FENCE);
@@ -73,7 +73,7 @@ __kernel void monte_carlo_2d_two_barriers(
         barrier(CLK_LOCAL_MEM_FENCE);
     }
 
-    /* 6. One global store per work-group, linearised group id. */
+    // 6. One global store per work-group, linearised group id. 
     if (lx == 0 && ly == 0) {
         const uint group_lin = get_group_id(1) * get_num_groups(0)
                              + get_group_id(0);

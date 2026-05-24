@@ -1,9 +1,11 @@
 /*
- * monte_carlo_2d_stride.cl — 2-D Monte Carlo kernel with grid-stride sampling.
+ * monte_carlo_2d_stride.cl — 2-D Monte Carlo kernel with a 2-D matrix reduction.
  *
- * 2-D NDRange + 2-D grid-stride sampling loop. The work-group reduction
- * linearises (ly, lx) into a single scratch buffer with lid = ly*lws_x + lx
- * and runs an in-place sequential-addressing tree reduction.
+ * 2-D NDRange + 2-D grid-stride sampling loop. The work-group reduction keeps
+ * the 2-D (ly, lx) topology: Phase A collapses each row along x and Phase B
+ * collapses the resulting column of row sums along y. Sequential addressing
+ * keeps the active write/read sets disjoint within every step, so a single
+ * barrier per step is sufficient (one scratch buffer, no second barrier).
  */
 
 #include "misc.h"
@@ -15,9 +17,9 @@ __kernel void monte_carlo_2d_stride(
     const float           threshold,   /* destruction threshold */
     const ulong           base_offset, /* RNG seed/offset */
     const uint            n_runs,      /* total simulations to perform */
-    __local int*          scratch)     /* shared memory for reduction */
+    __local int*          scratch)     /* lws_x * lws_y ints */
 {
-    /* 1. 2-D indices and linearisation */
+    /* 1. 2-D indices */
     const uint lx = get_local_id(0);
     const uint ly = get_local_id(1);
     const uint lw = get_local_size(0);
@@ -28,9 +30,7 @@ __kernel void monte_carlo_2d_stride(
     const uint gw = get_global_size(0);
     const uint gh = get_global_size(1);
 
-    const uint lid = ly * lw + lx;
     const uint gid = gy * gw + gx;
-    const uint wg_size = lw * lh;
     const uint total_threads = gw * gh;
 
     /* 2. 2-D grid-stride loop */
@@ -39,20 +39,32 @@ __kernel void monte_carlo_2d_stride(
         private_sum += _run_trial(p_vec, n_cells, threshold, base_offset, r);
     }
 
-    /* 3. Sequential-addressing tree reduction (contiguous active lanes,
-     *    bank-conflict free). */
-    scratch[lid] = private_sum;
+    /* 3. Publish into the 2-D scratch grid (ly, lx), row-major. */
+    scratch[ly * lw + lx] = private_sum;
     barrier(CLK_LOCAL_MEM_FENCE);
 
-    for (uint active = wg_size >> 1; active > 0; active >>= 1) {
-        if (lid < active) {
-            scratch[lid] += scratch[lid + active];
+    /* 4. Phase A — in-place reduction along x (intra-row). Sequential
+     *    addressing keeps the active write set [0, stride) disjoint from the
+     *    read set [stride, 2*stride) within each row, so a single barrier per
+     *    step is hazard-free. Each row sum ends up at scratch[ly * lw]. */
+    for (uint stride = lw >> 1; stride > 0; stride >>= 1) {
+        if (lx < stride) {
+            scratch[ly * lw + lx] += scratch[ly * lw + lx + stride];
         }
         barrier(CLK_LOCAL_MEM_FENCE);
     }
 
-    /* 4. One global store per work-group, linearised group id. */
-    if (lid == 0) {
+    /* 5. Phase B — in-place reduction along y (inter-row) on the column of
+     *    row sums at scratch[ly * lw]. Only lx == 0 lanes participate. */
+    for (uint stride = lh >> 1; stride > 0; stride >>= 1) {
+        if (lx == 0 && ly < stride) {
+            scratch[ly * lw] += scratch[(ly + stride) * lw];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+
+    /* 6. One global store per work-group, linearised group id. */
+    if (lx == 0 && ly == 0) {
         const uint group_lin = get_group_id(1) * get_num_groups(0)
                              + get_group_id(0);
         partial[group_lin] = scratch[0];

@@ -8,6 +8,8 @@ from .adapters import (
     PyOpenCLMonteCarlo2DAdapter,
     PyOpenCLMonteCarlo2DPingPongAdapter,
     PyOpenCLMonteCarlo2DTwoBarriersAdapter,
+    PyOpenCLMonteCarloVectorizedAdapter,
+    PyOpenCLMonteCarloVectorizedPingPongAdapter,
 )
 from .services import run_preprocessing_batch
 
@@ -29,6 +31,8 @@ __all__ = [
     "PyOpenCLMonteCarlo2DAdapter",
     "PyOpenCLMonteCarlo2DPingPongAdapter",
     "PyOpenCLMonteCarlo2DTwoBarriersAdapter",
+    "PyOpenCLMonteCarloVectorizedAdapter",
+    "PyOpenCLMonteCarloVectorizedPingPongAdapter",
     # Domain
     "CompactedHabitat",
     "GridTopology",

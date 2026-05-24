@@ -21,6 +21,10 @@ from pyroclast.adapters.opencl_mc_2d_two_barriers_adapter import PyOpenCLMonteCa
 from pyroclast.domain.models import CompactedHabitat, MonteCarloConfig
 
 
+# NOTE: PyOpenCLMonteCarloVectorizedAdapter is deliberately excluded — its
+# vector RNG draws from a different stream layout, so it is not bit-exact with
+# these variants. It is validated statistically in
+# test_monte_carlo_vectorized_adapter.py instead.
 _ADAPTER_FACTORIES = [
     PyOpenCLMonteCarloAdapter,
     PyOpenCLMonteCarloPingPongAdapter,

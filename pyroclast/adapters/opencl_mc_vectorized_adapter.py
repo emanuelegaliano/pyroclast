@@ -1,9 +1,18 @@
-"""PyOpenCL 2-D Grid-Stride Monte Carlo Adapter.
+"""PyOpenCL Vectorized 1-D Monte Carlo Adapter.
 
-Adapter for the ``monte_carlo_2d_stride.cl`` kernel: 2-D NDRange with
-grid-stride sampling and an in-place 2-D matrix reduction over a single local
-scratch buffer (Phase A collapses each row along x, Phase B collapses the
-column of row sums along y), using a single barrier per reduction step.
+Adapter for the ``monte_carlo_vectorized.cl`` kernel: a 1-D NDRange kernel
+that uses MWC64X's vector RNG (``mwc64xvec2/4/8``) to advance ``vec_width``
+independent lanes per ``Step()``. The kernel keeps the launch-independent,
+position-based seeding of the scalar variant by building its vector state
+from ``vec_width`` scalar seeds, so each run still owns a contiguous,
+non-overlapping stream block of length ``ceil(n_cells/vec_width)*vec_width``.
+
+Unlike the other variants this kernel is **not** bit-exact with the scalar
+stream (the lane layout differs); it is validated statistically.
+
+The host pads ``p_vec`` up to the per-run stride with ``-1.0`` so the kernel's
+vector loads never run past the buffer and padded lanes (probability < 0) are
+deterministically never invaded — no tail loop or masking needed.
 """
 
 from __future__ import annotations
@@ -16,81 +25,71 @@ import numpy as np
 import pyopencl as cl  # type: ignore[import-untyped]
 
 from pyroclast.adapters.opencl_mc_adapter import PyOpenCLMonteCarloAdapter
-from pyroclast.domain.models import CompactedHabitat, GridTopology, MonteCarloConfig
+from pyroclast.domain.models import CompactedHabitat, MonteCarloConfig
 
 logger = logging.getLogger(__name__)
 
+_VALID_WIDTHS = (2, 4, 8)
 
-class PyOpenCLMonteCarlo2DAdapter(PyOpenCLMonteCarloAdapter):
-    """Adapter for the 2D grid-stride Monte Carlo sampling kernel."""
 
-    _SAMPLING_KERNEL_NAME = "monte_carlo_2d_stride"
+class PyOpenCLMonteCarloVectorizedAdapter(PyOpenCLMonteCarloAdapter):
+    """Adapter for the vectorized-RNG 1-D Monte Carlo sampling kernel."""
+
+    _SAMPLING_KERNEL_NAME = "monte_carlo_vectorized"
 
     def __init__(
         self,
         kernel_path: Path | None = None,
         profiling: bool = False,
+        vec_width: int = 4,
     ) -> None:
+        if vec_width not in _VALID_WIDTHS:
+            raise ValueError(
+                f"vec_width must be one of {_VALID_WIDTHS}, got {vec_width}."
+            )
+        self._vec_width = vec_width
         if kernel_path is None:
             kernel_path = (
-                Path(__file__).parent.parent / "kernels" / "monte_carlo_2d_stride.cl"
+                Path(__file__).parent.parent
+                / "kernels"
+                / "monte_carlo_vectorized.cl"
             )
-        super().__init__(kernel_path=kernel_path, profiling=profiling)
-
-    def suggest_topology(self, n_runs: int) -> GridTopology:
-        """Suggest a 2D execution grid optimised for the device."""
-        device = self._ctx.devices[0]
-        max_cu = device.max_compute_units
-
-        lws = (32, 8)
-        n_wgs_x = max_cu * 4
-        n_wgs_y = 2
-
-        gws = (n_wgs_x * lws[0], n_wgs_y * lws[1])
-        return GridTopology(gws=gws, lws=lws)
-
-    @staticmethod
-    def _get_sizes(
-        topology: GridTopology,
-    ) -> tuple[tuple[int, ...], tuple[int, ...], int]:
-        """Return (gws_tuple, lws_tuple, wg_size) regardless of 1-D/2-D."""
-        gws = topology.gws
-        lws = topology.lws
-
-        if isinstance(gws, int):
-            return (gws,), (lws,), int(lws)  # type: ignore[arg-type]
-
-        gws_arg = tuple(int(x) for x in gws)
-        lws_arg = tuple(int(x) for x in lws)  # type: ignore[arg-type]
-        wg_size = 1
-        for dim in lws_arg:
-            wg_size *= dim
-        return gws_arg, lws_arg, wg_size
-
-    def _allocate_partial_buffers(
-        self, n_wg: int
-    ) -> tuple[cl.Buffer, cl.Buffer]:
-        mf = cl.mem_flags
-        size = max(1, n_wg) * 4
-        return (
-            cl.Buffer(self._ctx, mf.READ_WRITE, size=size),
-            cl.Buffer(self._ctx, mf.READ_WRITE, size=size),
+        super().__init__(
+            kernel_path=kernel_path,
+            profiling=profiling,
+            extra_build_options=f"-DVEC_WIDTH={vec_width}",
         )
+
+    def _padded_p_host(self, habitat: CompactedHabitat) -> np.ndarray:
+        """Pad p_vec to the per-run stride (multiple of vec_width) with -1.0.
+
+        -1.0 is a sentinel: a draw x in [0, 1) is never <= -1.0, so padded
+        lanes never count as invaded regardless of the RNG output.
+        """
+        run_stride = self._run_stride(habitat.n_cells)
+        p_host = np.full(run_stride, -1.0, dtype=np.float32)
+        p_host[: habitat.n_cells] = np.asarray(habitat.p_vec, dtype=np.float32)
+        return np.ascontiguousarray(p_host, dtype=np.float32)
+
+    def _run_stride(self, n_cells: int) -> int:
+        """Stream positions consumed by one run = ceil(n_cells/W) * W."""
+        w = self._vec_width
+        return ((n_cells + w - 1) // w) * w
 
     def run(
         self,
         habitat: CompactedHabitat,
         config: MonteCarloConfig,
     ) -> float:
-        """Execute the 2D Monte Carlo kernel followed by the recursive reduce."""
-        p_host = np.ascontiguousarray(habitat.p_vec, dtype=np.float32)
+        """Estimate destruction probability for a single habitat via GPU."""
+        p_host = self._padded_p_host(habitat)
 
         topology = config.topology or self.suggest_topology(config.n_runs)
-        gws_arg, lws_arg, wg_size = self._get_sizes(topology)
-        total_threads = 1
-        for g in gws_arg:
-            total_threads *= g
-        n_wg = total_threads // wg_size
+        gws = topology.gws
+        lws = topology.lws
+        if isinstance(lws, int) and lws != self._compiled_wg_size:
+            self._recompile(lws)
+        n_wg = gws // lws
 
         mf = cl.mem_flags
         p_buf: cl.Buffer | None = None
@@ -98,23 +97,23 @@ class PyOpenCLMonteCarlo2DAdapter(PyOpenCLMonteCarloAdapter):
         partial_b: cl.Buffer | None = None
         try:
             p_buf = cl.Buffer(
-                self._ctx,
-                mf.READ_ONLY | mf.COPY_HOST_PTR,
-                hostbuf=p_host,
+                self._ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=p_host
             )
-            partial_a, partial_b = self._allocate_partial_buffers(n_wg)
+            partial_a = cl.Buffer(self._ctx, mf.READ_WRITE, size=n_wg * 4)
+            partial_b = cl.Buffer(
+                self._ctx, mf.READ_WRITE, size=max(1, n_wg) * 4
+            )
 
             event = self._kernel(
                 self._queue,
-                gws_arg,
-                lws_arg,
+                (gws,),
+                (lws,),
                 p_buf,
                 partial_a,
                 np.uint32(habitat.n_cells),
                 np.float32(config.threshold),
                 np.uint64(int(config.seed)),
                 np.uint32(config.n_runs),
-                cl.LocalMemory(4 * wg_size),
             )
 
             if self._profiling:
@@ -150,14 +149,17 @@ class PyOpenCLMonteCarlo2DAdapter(PyOpenCLMonteCarloAdapter):
             )
 
         batch_size = config.n_runs // n_batches
-        p_host = np.ascontiguousarray(habitat.p_vec, dtype=np.float32)
+        p_host = self._padded_p_host(habitat)
+        # Each run consumes run_stride stream positions, so batches must step
+        # base_offset by batch_size * run_stride to stay non-overlapping.
+        run_stride = self._run_stride(habitat.n_cells)
 
         topology = config.topology or self.suggest_topology(batch_size)
-        gws_arg, lws_arg, wg_size = self._get_sizes(topology)
-        total_threads = 1
-        for g in gws_arg:
-            total_threads *= g
-        n_wg = total_threads // wg_size
+        gws = topology.gws
+        lws = topology.lws
+        if isinstance(lws, int) and lws != self._compiled_wg_size:
+            self._recompile(lws)
+        n_wg = gws // lws
 
         mf = cl.mem_flags
         p_buf: cl.Buffer | None = None
@@ -165,26 +167,27 @@ class PyOpenCLMonteCarlo2DAdapter(PyOpenCLMonteCarloAdapter):
         partial_b: cl.Buffer | None = None
         try:
             p_buf = cl.Buffer(
-                self._ctx,
-                mf.READ_ONLY | mf.COPY_HOST_PTR,
-                hostbuf=p_host,
+                self._ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=p_host
             )
-            partial_a, partial_b = self._allocate_partial_buffers(n_wg)
+            partial_a = cl.Buffer(self._ctx, mf.READ_WRITE, size=n_wg * 4)
+            partial_b = cl.Buffer(
+                self._ctx, mf.READ_WRITE, size=max(1, n_wg) * 4
+            )
 
             total_count = 0
             for i in range(n_batches):
                 event = self._kernel(
                     self._queue,
-                    gws_arg,
-                    lws_arg,
+                    (gws,),
+                    (lws,),
                     p_buf,
                     partial_a,
                     np.uint32(habitat.n_cells),
                     np.float32(config.threshold),
-                    np.uint64(int(config.seed) + i * batch_size * habitat.n_cells),
+                    np.uint64(int(config.seed) + i * batch_size * run_stride),
                     np.uint32(batch_size),
-                    cl.LocalMemory(4 * wg_size),
                 )
+
                 if self._profiling:
                     event.wait()
                     elapsed_ms = (

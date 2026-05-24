@@ -9,7 +9,7 @@ The problem consists of estimating the probability that a lava flow will cause t
 We can define the variables of the problem as follows:
 \begin{itemize}
     \item Let $N_c$ be the total number of active cells that make up the habitat under evaluation.
-    \item Let $P = \{0_0, p_1, \dots, p_{N_c-1}\}$ be the set of invasion probabilities for each cell of the habitat, where $p_i$ is the probability that the lava flow will invade cell $i$.
+    \item Let $\mathcal{Q} = \{p_0, p_1, \dots, p_{N_c-1}\}$ be the set of invasion probabilities for each cell of the habitat, where $p_i$ is the probability that the lava flow will invade cell $i$.
     \item Let $\theta \in [0, 1]$ be the critical fraction or destruction threshold, which represents the minimum fraction of the habitat that must be invaded for it to be considered destroyed.
     \item Let $R$ be the total number of Monte Carlo simulations to be performed.
 \end{itemize}
@@ -50,16 +50,146 @@ The first version of the Monte Carlo kernel implemented in Pyroclast is a straig
 \subsection{Kernel Design}\label{subsec:kernel_design}
 The kernel operates on a 1-dimensional grid of work-items, where each work-item is reponsible for executing a whole Monte Carlo simulation on the full array of invasion probabilities.
 
-\paragraph{Work-Item Mapping}
+\begin{figure}[htpb]
+    \centering
+    \begin{tikzpicture}[
+        cell/.style={rectangle, draw=black, minimum width=1.2cm, minimum height=0.8cm, font=\sffamily},
+        thread/.style={rectangle, rounded corners, draw=blue!80, fill=blue!10, minimum width=1.2cm, minimum height=0.6cm, font=\sffamily\footnotesize},
+        arrow/.style={-{Stealth[scale=1.2]}, thick, blue!80}
+    ]
+
+    % Total Simulations Array (top row, y=0)
+    \foreach \i in {0,...,8} {
+        \node[cell] (sim\i) at (\i*1.2 + 0.6, 0) {\i};
+    }
+    \node[cell, draw=none] at (9*1.2 + 0.6, 0) {\dots};
+    \node[cell] (simN) at (10*1.2 + 0.6, 0) {$R-1$};
+
+    % Stride brace above cells: label sits at ~y=0.85
+    \draw[thick, blue!80, decorate, decoration={brace, amplitude=5pt}]
+        (sim0.north west) -- (sim3.north east)
+        node[midway, above=6pt, font=\sffamily\footnotesize] {Stride = $P$};
+
+    % Title placed above the stride label (y=1.4 clears ~y=0.85)
+    \node[anchor=south west, font=\sffamily\bfseries] at (0, 1.4)
+        {Total Monte Carlo Simulations ($R$)};
+
+    % Work-items, placed at y=-2.2
+    \foreach \i in {0,...,3} {
+        \node[thread] (wi\i) at (\i*1.2 + 0.6, -2.2) {WI \i};
+    }
+
+    % Brace for 1st Iteration below WI nodes: label sits at ~y=-2.85
+    \draw[thick, decorate, decoration={brace, amplitude=5pt, mirror}]
+        (wi0.south west) -- (wi3.south east)
+        node[midway, below=6pt, font=\sffamily\footnotesize] {1st Iteration};
+
+    % GPU Work-Items label placed below the 1st Iteration brace label (y=-3.2 anchor=north)
+    \node[anchor=north west, font=\sffamily\bfseries] at (0, -3.2)
+        {GPU Work-Items (Global Work Size, $P$)};
+
+    % Mappings Iteration 1: dashed straight arrows
+    \foreach \i in {0,...,3} {
+        \draw[arrow, dashed] (wi\i.north) -- (sim\i.south);
+    }
+
+    % Mappings Iteration 2 (Stride): curved arrows to sim4..sim7
+    \foreach \i in {0,...,3} {
+        \pgfmathtruncatemacro{\target}{\i+4}
+        \draw[arrow] (wi\i.north) to[out=75, in=270] (sim\target.south);
+    }
+
+    \end{tikzpicture}
+    \caption{Visual representation of the Grid-Stride Loop (Sliding Window) approach. A hardware-optimized grid of $P$ work-items iteratively processes the total $R$ simulations by advancing with a stride equal to the Global Work Size.}
+    \label{fig:grid_stride_loop}
+\end{figure}
+
+\paragraph{Work-Item Mapping.}
 A critical architectural decision in this baseline was how to map the computational workload to the GPU's work-items. The most intuitive approach is the pure stream processing model, where each work-item is responsible for executing only single Monte Carlo. This approach was delibartely discarded due to a sever hardware inefficiency known as the "prime number problem"\footnote{Also knowns as one of the "leaky abstractions" of GPU programming.}: in OpenCL the number of launched work-items is defined by the Global Work Size, which is hwardware-partitioned into smaller blocks called work-groups, defined by the Local Work Size. If we tie the number of work-items to the number of simulations, an user requesting a number of simulations that is prime would force a primw GWS and since the only integer divisors of a prime number are 1 and itself, the hardware would be forced to launch work-groups containing a single work-item (LWS = 1).
 
-\paragraph{Sliding Window}
+\paragraph{Sliding Window.}
 To resolve this limitation a sliding window approach is adopted. Instead of launching a grid sized perfectly to the dataset, we launch a hardware optimized grid and allow each work-item to process multiple runs through a for loop, taking strides\footnote{The stride represents the number of simulations processed by each work-item in the sliding window approach.} equal to the entire GWS.
 
 \subsection{Algorithmic Complexity}\label{subsec:algorithmic_complexity}
-The theoretical time complexity of the kernel depends on the total number of Monte Carlo simulations $R$, the number of cells $N_c$ and the number of work-items $P$ launched.
+The theoretical time complexity of the kernel depends on the total number of Monte Carlo simulations $R$, the number of cells $N_c$, the number of work-items $P$ launched and the dimension of the work-groups $L$ (LWS). 
 
+\paragraph{Time Complexity.}
+THe time complexity of the kernel can be divided in due principal components:
+\begin{description}
+    \item[Sampling and Monte Carlo Run:] Kernel doesn't map a single work-item, so the for loop iterates over runs for a total of $R/P$ iterations. For each run, the kernel iterates over the $N_c$ cells of the habitat in order to evaluate the invasion, resulting in a time complexity
+    \[
+    \mathcal{O}\left(\frac{R}{P} \cdot N_c\right)
+    \]
+    \item[Reduction:] After all work-items have completed their assigned runs, a reduction operation is performed to sum the results of all simulations. The tree reduction operates on an array in local memory of size $L$ (the number of work-items in a work-group) and since LWS is a power of 2, the reduction divides the problem size by 2 at each step, resulting in a time complexity of
+    \[
+    \mathcal{O}(\log_2 L)
+    \]
+\end{description}
 
 \noindent
-\textbf{AT THE END, for now just notes.}
-\section{Benchmark}\label{sec:benchmark}
+Finally, the overall time complexity of the kernel can be expressed as:
+\begin{equation}
+    T(N_c, R, P, L) = \mathcal{O}\left(\frac{R}{P} \cdot N_c + \log_2 L\right)
+\label{eq:standard_kernel_time_complexity}
+\end{equation}
+
+\paragraph{Space Complexity.}
+The space complexity of the kernel is determined in hierarchies:
+\begin{itemize}
+    \item \textbf{Global Memory}: The kernel reads the compacted array of probabilities \texttt{p\_vec}, which has a size of $\mathcal{O}(N_c)$. In output, it writes a partial sum of the destruction results not for each work-item, but for each work-group. Assuming a global work size of $P$ and a local work size of $L$, the output array \texttt{partial} has a size of $P/L$. Thus, the total global memory complexity is $\mathcal{O}(N_c + P/L)$.
+    
+    \item \textbf{Local Memory}: Each work-group allocates a shared \texttt{scratch} array used for the parallel tree reduction. The size of this array corresponds exactly to the local work size $L$ (which is statically set to 256). Therefore, the local memory complexity is $\mathcal{O}(L)$ per work-group.
+    
+    \item \textbf{Private Memory}: Each individual work-item maintains only a few local state variables (such as the \texttt{private\_sum} accumulator, loop counters, and thread IDs). This requires a strictly constant amount of memory, resulting in a private space complexity of $\mathcal{O}(1)$ per work-item.
+\end{itemize}
+
+\section{1D Ping-pong Kernel}\label{sec:1d_ping_pong_kernel}
+While the standard 1D kernel performs an efficient parallel tree reduction, it updates the shsared memory array in-place. This causes the use of two barriers:
+\begin{itemize}
+    \item One before writing in local memory, to ensure that all work-items have completed their computations and are ready to write their partial sums.
+    \item One after writing, to ensure that all work-items have completed their writes before any work-item can read from the shared memory for the reduction step.
+\end{itemize}
+
+\subsection{Double buffering}\label{subsec:double_buffering}
+In order to eliminate the need for the second barrier, a double buffering technique is adopted. Instead of using a single shared memory array for the reduction, two separate arrays are allocated: one for reading and one for writing. During each step of the reduction, work-items read from one buffer and write their results to the other buffer. After each step, the roles of the buffers are swapped. This approach allows work-items to proceed with their computations without waiting for all other work-items to complete their writes, thus reducing synchronization overhead.
+
+\subsection{Trade-offs}\label{subsec:trade_offs}
+The implementation of this kernel explicitly highlights the trade-off between memory usage and synchronization overhead.
+\begin{description}
+    \item[Benefits.] By garanteeing that the buffer being read from the source is physically distinct from the buffer being written to the destination, we can eliminate any possibility of Write-After-Read hazards. This allows the step to be safely executed with only a single barrier at the top of the loop to publish the initial writes, potentially allowing work-items to proceed with their computations without waiting for all other work-items to complete their writes, thus reducing synchronization overhead.
+    \item[The cost.] To achieve this safety, the kernel requires an additional local array. This part we'll be seen in the space complexity analysis at \ref{subsec:algorithmic_complexity_pingpong}, but it is important to note that this additional memory usage may limit the maximum local work size that can be used, as the total local memory available on the GPU is a fixed resource. This could potentially reduce the degree of parallelism and impact performance if the local work size needs to be reduced to accommodate the additional buffer.  
+\end{description}
+
+\subsection{Algorithmic Complexity}\label{subsec:algorithmic_complexity_pingpong}
+The theoretical time complexity of the 1D Ping-Pong kernel remains fundamentally similar to the standard version, as it depends on the total number of Monte Carlo simulations $R$, the number of cells $N_c$, the number of launched work-items $P$, and the dimension of the work-groups $L$ (LWS). 
+
+\paragraph{Time Complexity.}
+The time complexity of the kernel is divided into the same two principal components as the standard kernel and the time complexity of each component remains unchanged:
+\begin{equation}
+    T(N_c, R, P, L) = \mathcal{O}\left(\frac{R}{P} \cdot N_c + \log_2 L\right)
+\label{eq:pingpong_kernel_time_complexity}
+\end{equation}
+
+\paragraph{Space Complexity.}
+The space complexity highlights the main architectural trade-off of the double-buffering approach:
+\begin{itemize}
+    \item \textbf{Global Memory}: The kernel reads the compacted \texttt{p\_vec} array of size $\mathcal{O}(N_c)$ and writes to the \texttt{partial} array of size $P/L$. The total global memory complexity remains $\mathcal{O}(N_c + P/L)$.
+    
+    \item \textbf{Local Memory}: To eliminate synchronization hazards with fewer barriers, each work-group allocates \textit{two} shared arrays instead of one: a primary \texttt{scratch1} array of size $L$ and a secondary \texttt{scratch2} array of size $L/2$. While asymptotically this is still $\mathcal{O}(L)$ per work-group, the absolute footprint is strictly $1.5 \times L$. This increased local memory usage directly reduces the maximum hardware occupancy (number of active work-groups) on the Compute Units.
+    
+    \item \textbf{Private Memory}: Each work-item maintains the usual local state variables alongside a new \texttt{val} register used to carry the running sum across loop iterations safely. This still requires a constant amount of memory, resulting in a private space complexity of $\mathcal{O}(1)$ per work-item.
+\end{itemize}
+
+\section{Transitioning to 2D Architectures}\label{sec:transitioning_2d_architectures}
+
+
+\section{TODO: Benchmark}\label{sec:benchmark}
+
+DUMMY CIT \cite{williams2009roofline}
+
+Note e appunti.
+
+Cose da vedere:
+\begin{itemize}
+    \item Il numero di work-items e work-groups lanciati per ogni kernel, e come questo si relaziona con il numero totale di simulazioni $R$ e la dimensione del lavoro locale $L$. Sopratutto per fare vedere la differenza tra due barriere e ping pong.
+\end{itemize}
