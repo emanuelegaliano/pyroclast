@@ -256,8 +256,116 @@ The space complexity highlights the critical trade-off of the vectorized approac
     Consequently, the private memory footprint scales linearly with the vector width, becoming $\mathcal{O}(W)$ per work-item. High register pressure is a well-known OpenCL constraint: if a single work-item requests too many registers (e.g., when $W=8$ or $W=16$), the Compute Unit is forced to schedule fewer concurrent wavefronts/warps, directly decreasing the hardware occupancy and potentially negating the SIMD speedup.
 \end{itemize}
 
+\section{Kernel Map-Centric}\label{sec:kernel_map_centric}
+In addition to the standard habitat-centric kernel design, we also explored a map-centric approach. All the kernels presented so far are \emph{habitat-centric}: each launch operates on a single habitat through its stream-compacted probability vector \texttt{p\_vec}, sampling only the cells that belong to that habitat. When several habitats overlap geographically, however, the same map cell belongs to more than one habitat, and the habitat-centric design re-samples it---drawing a fresh pseudo-random number---once per overlapping habitat. The \emph{map-centric} kernel inverts this mapping: it sweeps the entire geographic map a single time, draws exactly one sample per cell, and propagates the outcome to every habitat that occupies that cell in the same pass. Overlap therefore costs no additional random numbers.
 
-\section{Transitioning to 2D Architectures}\label{sec:transitioning_2d_architectures}
+\subsection{Kernel Design}\label{subsec:map_centric_design}
+The kernel is launched on the same 1-dimensional grid of work-items over the simulation axis $R$ as the baseline, and reuses the grid-stride loop described in Section \ref{sec:standard_kernel}. The fundamental difference lies in what a single run iterates over: instead of the $N_c$ cells of one habitat, a run now sweeps the $M$ cells of the whole map (more precisely, of the union footprint of the habitats in the current batch) and updates all of them simultaneously.
+
+\paragraph{Bitmask Encoding.}
+For each map cell $k$ the host provides a 64-bit presence bitmask \texttt{habitat\_mask[k]}, in which bit $h$ is set if and only if habitat $h$ of the current batch occupies cell $k$. Because a \texttt{ulong} holds exactly 64 bits, at most $\texttt{MAX\_BATCH\_SIZE} = 64$ habitats can be encoded per launch; the host partitions any larger problem into batches of at most 64 habitats. This compact encoding is what allows a single cell sweep to serve every habitat at once.
+
+\begin{figure}[htpb]
+    \centering
+    \begin{tikzpicture}[
+        mapcell/.style={rectangle, draw=black, minimum width=1.0cm, minimum height=0.8cm, font=\sffamily\small},
+        invaded/.style={rectangle, draw=black, very thick, fill=red!20, minimum width=1.0cm, minimum height=0.8cm, font=\sffamily\small},
+        bitoff/.style={rectangle, draw=gray!70, fill=gray!8, minimum width=0.7cm, minimum height=0.7cm, font=\ttfamily\small},
+        biton/.style={rectangle, draw=black, fill=blue!15, minimum width=0.7cm, minimum height=0.7cm, font=\ttfamily\small},
+        hab/.style={rectangle, rounded corners, draw=blue!80, fill=blue!10, minimum width=1.7cm, minimum height=0.7cm, font=\sffamily\footnotesize},
+        arrow/.style={-{Stealth[scale=1.0]}, thick, blue!70}
+    ]
+
+    % --- Map sweep row ---
+    \node[anchor=south west, font=\sffamily\bfseries] at (0, 0.55) {Single Map Sweep ($M$ cells)};
+    \foreach \i in {0,1,2} {
+        \node[mapcell] (m\i) at (\i*1.0, 0) {\i};
+    }
+    \node[invaded] (mk) at (3*1.0, 0) {$k$};
+    \node[mapcell, draw=none] (mdots) at (4*1.0, 0) {\dots};
+    \node[mapcell] (mN) at (5*1.0, 0) {$M-1$};
+
+    % --- Bitmask row ---
+    \node[anchor=east, font=\ttfamily\footnotesize] at (-0.55, -2.0) {mask};
+    \node[biton]  (b0) at (0.0, -2.0) {1};
+    \node[bitoff] (b1) at (0.8, -2.0) {0};
+    \node[biton]  (b2) at (1.6, -2.0) {1};
+    \node[biton]  (b3) at (2.4, -2.0) {1};
+    \node[bitoff] (b4) at (3.2, -2.0) {0};
+    \node[bitoff] (b5) at (4.0, -2.0) {0};
+    \foreach \h in {0,1,2,3,4,5} {
+        \node[font=\sffamily\scriptsize, anchor=north] at (\h*0.8, -2.45) {$h{=}\h$};
+    }
+
+    % Arrow from invaded cell to its mask row
+    \draw[arrow] (mk.south) to[out=270, in=90] (b2.north);
+
+    % --- Habitat counters ---
+    \node[hab] (hc0) at (0.0, -4.2) {Habitat 0};
+    \node[hab] (hc2) at (2.2, -4.2) {Habitat 2};
+    \node[hab] (hc3) at (4.4, -4.2) {Habitat 3};
+
+    \draw[arrow] (b0.south) -- (hc0.north) node[midway, right=1pt, font=\sffamily\scriptsize] {$+1$};
+    \draw[arrow] (b2.south) -- (hc2.north) node[midway, right=1pt, font=\sffamily\scriptsize] {$+1$};
+    \draw[arrow] (b3.south) -- (hc3.north) node[midway, right=1pt, font=\sffamily\scriptsize] {$+1$};
+
+    \end{tikzpicture}
+    \caption{Map-Centric update for a single invaded cell $k$. One $\mathcal{U}(0,1)$ draw is taken for the cell; on invasion ($x_k \leq p_k$) its 64-bit presence mask is decoded and every habitat occupying the cell (bits set to 1) has its invaded-cell counter incremented in the same branchless pass. Here cell $k$ belongs to habitats 0, 2 and 3.}
+    \label{fig:map_centric_bitmask}
+\end{figure}
+
+\paragraph{Single-Sweep Sampling and RNG Reuse.}
+For each run $r$ the MWC64X generator is seeded exactly once, at the stream position $\texttt{base\_offset} + r \cdot M$, so that run $r$ owns the contiguous, non-overlapping stream segment $[\,\texttt{base\_offset} + r\cdot M,\; \texttt{base\_offset} + (r+1)\cdot M\,)$. The work-item then sweeps all $M$ cells: a cell whose mask is zero (no habitat present) is skipped outright, while for every non-empty cell a single \texttt{Step()} produces a draw $x_k \sim \mathcal{U}(0,1)$. If $x_k \leq p_k$ the cell is credited to all the habitats present in it. Crucially, the per-cell RNG cost is identical to the habitat-centric baseline (one draw per cell), so the saving from overlap reuse is genuine: a cell shared by ten habitats is sampled once instead of ten times, while stream independence across runs is preserved exactly as before.
+
+\paragraph{Branchless Accumulation.}
+Once a cell is found to be invaded, the kernel distributes the outcome to the habitats through the inner update 
+\begin{center}
+$\texttt{run\_invaded[h] += (mask >> h) \& 1}$
+\end{center}
+Rather than branching on whether each habitat is present---which would introduce thread divergence within a warp---the kernel unconditionally extracts bit $h$ and adds it to the corresponding counter (Figure \ref{fig:map_centric_bitmask}). The increment is therefore $1$ for a present habitat and $0$ otherwise, with no divergent control flow. After the sweep, each habitat's destruction is assessed with the same strict-threshold rule of Section \ref{subsec:monte_carlo_run}: the run is a destruction event for habitat $h$ if and only if $\texttt{run\_invaded[h]} / \texttt{hab\_total\_cells[h]} > \theta_h$.
+
+\paragraph{Two-Dimensional Local Reduction.}
+The work-group then collapses the per-work-item destruction counts for \emph{all} habitats at once. The local \texttt{scratch} buffer is laid out as $\texttt{scratch}[h \cdot L + \texttt{lid}]$---one row per habitat, one column per lane---and the usual power-of-2 tree reduction runs over the lane axis for every habitat row. This transposed layout is deliberately bank-conflict free: consecutive lanes within a habitat row map to consecutive memory banks (stride $1$), so the threads of a warp never contend for the same bank. Finally, \texttt{lid 0} writes each habitat's group total to $\texttt{partial}[h \cdot n_{wg} + \texttt{group\_id}]$, and the host closes the reduction by summing the $n_{wg}$ partials of each habitat.
+
+\subsection{Trade-offs}\label{subsec:map_centric_tradeoffs}
+The map-centric design trades the redundant sampling of overlapping habitats for a heavier per-cell update, and whether this trade is favourable depends entirely on how much the habitats actually overlap.
+\begin{description}
+    \item[Benefit (RNG reuse).] The single map sweep amortises the cost of random number generation across all habitats sharing a cell. The deeper the geographic overlap, the larger the saving, since the number of draws is bounded by the union footprint $M$ rather than by the sum $\sum_h N_c^{(h)}$ of the individual habitat sizes.
+    \item[Cost (branchless inner loop).] The very feature that removes divergence also removes the ability to skip absent habitats: the inner loop performs $H = \texttt{num\_habitats}$ iterations for \emph{every} invaded cell, regardless of how many habitats truly occupy it. The accumulation cost thus scales with the batch size, not with the actual overlap depth of the cell.
+    \item[Cost (register pressure).] Each work-item maintains two private \texttt{int[MAX\_BATCH\_SIZE]} arrays (\texttt{run\_invaded} and \texttt{private\_destroyed}), i.e. up to $512$ bytes of private state. This footprint tends to spill registers, lowering the number of concurrent wavefronts and hence the hardware occupancy.
+\end{description}
+\noindent
+Consequently the map-centric kernel only outperforms the habitat-centric baselines once the average overlap depth is high enough for the RNG-reuse saving to overcome both the $H$-wide inner loop and the increased register pressure. With little or no overlap it is dominated by the baseline. A quantitative comparison is deferred to the benchmark in Section \ref{sec:benchmark}.
+
+\subsection{Algorithmic Complexity}\label{subsec:map_centric_complexity}
+The complexity of the map-centric kernel is governed by the number of map cells $M$ (\texttt{n\_map\_cells}) and the number of habitats per batch $H$ (\texttt{num\_habitats}, with $H \leq \texttt{MAX\_BATCH\_SIZE} = 64$), in addition to the usual parameters $R$, $P$ and $L$.
+
+\paragraph{Time Complexity.}
+The time complexity is again divided into the two principal components:
+\begin{description}
+    \item[Sampling and Monte Carlo Run:] each work-item processes $R/P$ runs through the sliding window loop. Within a run it sweeps the $M$ map cells, and in the worst case (every cell invaded) the branchless inner loop executes $H$ iterations per cell, yielding $\mathcal{O}(M \cdot H)$ work per run. The per-habitat destruction assessment adds a further $\mathcal{O}(H)$ that is dominated by the sweep. The sampling phase therefore costs
+    \[
+    \mathcal{O}\left(\frac{R}{P} \cdot M \cdot H\right)
+    \]
+    \item[Reduction:] the two-dimensional tree reduction operates over the $L$ lanes of the work-group for each of the $H$ habitat rows, resulting in $\mathcal{O}(H \cdot \log_2 L)$.
+\end{description}
+\noindent
+The overall time complexity is then
+\begin{equation}
+    T(M, H, R, P, L) = \mathcal{O}\left(\frac{R}{P} \cdot M \cdot H + H \cdot \log_2 L\right)
+\label{eq:map_centric_kernel_time_complexity}
+\end{equation}
+Since $H$ is bounded by the hardware constant $\texttt{MAX\_BATCH\_SIZE} = 64$, this is asymptotically $\mathcal{O}\!\left(\frac{R}{P} \cdot M + \log_2 L\right)$. The practical significance, however, lies precisely in the constants: $M$ can be substantially smaller than $\sum_h N_c^{(h)}$ when habitats overlap (the RNG-reuse benefit), while the $H$ factor on the inner loop is the per-cell penalty discussed in Section \ref{subsec:map_centric_tradeoffs}.
+
+\paragraph{Space Complexity.}
+The space complexity reflects the cost of carrying all habitats through a single kernel invocation:
+\begin{itemize}
+    \item \textbf{Global Memory}: the kernel reads the full-map \texttt{p\_vec} ($\mathcal{O}(M)$ floats) and \texttt{habitat\_mask} ($\mathcal{O}(M)$ \texttt{ulong}s), plus the per-habitat \texttt{hab\_total\_cells} and \texttt{hab\_thresholds} ($\mathcal{O}(H)$ each). In output it writes the \texttt{partial} array of $H$ rows by $n_{wg} = P/L$ columns. The total global memory complexity is therefore $\mathcal{O}(M + H \cdot P/L)$.
+
+    \item \textbf{Local Memory}: the dynamic \texttt{scratch} buffer holds one column per lane for each habitat row, i.e. $L \cdot H$ integers. The local memory complexity is thus $\mathcal{O}(L \cdot H)$ per work-group---an $H$-fold expansion over the scalar reduction, which further constrains the achievable occupancy.
+
+    \item \textbf{Private Memory}: each work-item allocates the two \texttt{int[MAX\_BATCH\_SIZE]} accumulators (\texttt{run\_invaded} and \texttt{private\_destroyed}) together with the RNG state and a few loop counters. The private footprint therefore scales as $\mathcal{O}(H)$ per work-item (bounded by the constant batch size), as opposed to the $\mathcal{O}(1)$ of the scalar kernel.
+\end{itemize}
 
 
 \section{TODO: Benchmark}\label{sec:benchmark}
