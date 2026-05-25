@@ -96,23 +96,25 @@ __kernel void monte_carlo_map_centric(
     }
 
     /* 2-D local reduction over the lane (lid) axis, all habitats at once.
-     * Layout: scratch[lid * num_habitats + h] — row per work-item, col per
-     * habitat. LWS is a power of two (guaranteed by the host). */
+     * Layout: scratch[h * lsize + lid] — row per habitat, col per work-item.
+     * This transposed layout avoids bank conflicts: threads in a warp access
+     * consecutive lids within the same habitat row, so stride = 1 and every
+     * thread hits a different bank. LWS is a power of two (guaranteed by
+     * the host). */
     for (uint h = 0u; h < num_habitats; h++)
-        scratch[lid * num_habitats + h] = private_destroyed[h];
+        scratch[h * lsize + lid] = private_destroyed[h];
     barrier(CLK_LOCAL_MEM_FENCE);
 
     for (uint stride = lsize >> 1; stride > 0u; stride >>= 1) {
         if (lid < stride) {
             for (uint h = 0u; h < num_habitats; h++)
-                scratch[lid * num_habitats + h] +=
-                    scratch[(lid + stride) * num_habitats + h];
+                scratch[h * lsize + lid] += scratch[h * lsize + (lid + stride)];
         }
         barrier(CLK_LOCAL_MEM_FENCE);
     }
 
     if (lid == 0u) {
         for (uint h = 0u; h < num_habitats; h++)
-            partial[h * n_wg + gid0] = scratch[h];
+            partial[h * get_num_groups(0) + get_group_id(0)] = scratch[h * lsize];
     }
 }
