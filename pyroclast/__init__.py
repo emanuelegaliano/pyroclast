@@ -1,13 +1,11 @@
 from .io import FileMapRepository, FileMapStrategy, GeoTiffMap, HabitatCriteria, InvasionCriteria
 from .ABCs import MapRepository, MapCriteria, RasterMap, MapRepositoryStrategy, IComputeAdapter
-from .domain import CompactedHabitat, GridTopology
+from .domain import CompactedHabitat, GridTopology, SpatialHabitat
 from .adapters import (
     PyOpenCLAdapter,
+    PyOpenCLMapCentricAdapter,
     PyOpenCLMonteCarloAdapter,
     PyOpenCLMonteCarloPingPongAdapter,
-    PyOpenCLMonteCarlo2DAdapter,
-    PyOpenCLMonteCarlo2DPingPongAdapter,
-    PyOpenCLMonteCarlo2DTwoBarriersAdapter,
     PyOpenCLMonteCarloVectorizedAdapter,
     PyOpenCLMonteCarloVectorizedPingPongAdapter,
 )
@@ -28,14 +26,13 @@ __all__ = [
     "PyOpenCLAdapter",
     "PyOpenCLMonteCarloAdapter",
     "PyOpenCLMonteCarloPingPongAdapter",
-    "PyOpenCLMonteCarlo2DAdapter",
-    "PyOpenCLMonteCarlo2DPingPongAdapter",
-    "PyOpenCLMonteCarlo2DTwoBarriersAdapter",
     "PyOpenCLMonteCarloVectorizedAdapter",
     "PyOpenCLMonteCarloVectorizedPingPongAdapter",
+    "PyOpenCLMapCentricAdapter",
     # Domain
     "CompactedHabitat",
     "GridTopology",
+    "SpatialHabitat",
     # Services
     "run_preprocessing_batch",
 ]

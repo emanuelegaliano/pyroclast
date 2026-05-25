@@ -22,9 +22,6 @@ from pyroclast import (
     PyOpenCLAdapter,
     PyOpenCLMonteCarloAdapter,
     PyOpenCLMonteCarloPingPongAdapter,
-    PyOpenCLMonteCarlo2DAdapter,
-    PyOpenCLMonteCarlo2DPingPongAdapter,
-    PyOpenCLMonteCarlo2DTwoBarriersAdapter,
     PyOpenCLMonteCarloVectorizedAdapter,
 )
 from pyroclast.domain.models import GridTopology, MonteCarloConfig
@@ -34,9 +31,6 @@ from pyroclast.services import run_preprocessing_batch
 KERNELS = {
     "1D-standard": PyOpenCLMonteCarloAdapter,
     "1D-ping-pong": PyOpenCLMonteCarloPingPongAdapter,
-    "2D-stride": PyOpenCLMonteCarlo2DAdapter,
-    "2D-ping-pong": PyOpenCLMonteCarlo2DPingPongAdapter,
-    "2D-two-barriers": PyOpenCLMonteCarlo2DTwoBarriersAdapter,
     # Vectorized-RNG variants (factories carry the vec_width).
     "1D-vec2": lambda profiling=False: PyOpenCLMonteCarloVectorizedAdapter(profiling=profiling, vec_width=2),
     "1D-vec4": lambda profiling=False: PyOpenCLMonteCarloVectorizedAdapter(profiling=profiling, vec_width=4),

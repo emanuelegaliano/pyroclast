@@ -154,6 +154,94 @@ class CompactedHabitat:
 
 
 @dataclass(frozen=True)
+class SpatialHabitat:
+    """Immutable Value Object holding a habitat in *2-D, uncompacted* form.
+
+    Where :class:`CompactedHabitat` discards spatial layout (it stores only the
+    non-zero ``p_vec`` values after stream compaction), ``SpatialHabitat`` keeps
+    the full geographic footprint as a 2-D boolean *presence mask* aligned to
+    the global probability map.  This is the input the **Map-Centric** Monte
+    Carlo kernel needs: it lets the host build, for every map cell, a 64-bit
+    bitmask of which habitats occupy that cell, so a single RNG draw per cell
+    updates all overlapping habitats at once.
+
+    Architectural role
+    ------------------
+    A *Value Object* in the domain ring (no infrastructure dependencies).  Two
+    instances are structurally equal when their ``habitat_code`` and
+    ``threshold`` match; ``presence_mask`` is excluded from equality and hashing
+    for the same reasons ``CompactedHabitat.p_vec`` is (NumPy ``__eq__`` returns
+    an array, and the payload is not part of the identity).
+
+    Parameters
+    ----------
+    habitat_code : str
+        Identifier of the habitat type.  Must be a non-empty string.
+    presence_mask : numpy.ndarray
+        2-D boolean array over the geographic grid; ``True`` marks a cell that
+        belongs to this habitat.  Must share its shape with the global
+        probability map passed to the adapter.  Excluded from ``__eq__`` and
+        ``__hash__``.
+    threshold : float
+        Per-habitat critical invaded fraction :math:`\\theta \\in [0, 1]`.  A
+        simulation destroys this habitat when its invaded fraction **strictly
+        exceeds** ``threshold`` (matching the scalar baseline kernel).
+
+    Raises
+    ------
+    ValueError
+        If ``habitat_code`` is empty, ``presence_mask`` is not 2-D, or
+        ``threshold`` is outside ``[0.0, 1.0]``.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> mask = np.array([[True, False], [False, True]])
+    >>> h = SpatialHabitat(habitat_code="9340", presence_mask=mask, threshold=0.3)
+    >>> h.n_cells
+    2
+    >>> h.shape
+    (2, 2)
+    """
+
+    habitat_code: str
+    presence_mask: np.ndarray = field(compare=False, hash=False)
+    threshold: float = 0.0
+
+    def __post_init__(self) -> None:
+        """Validate invariants immediately after dataclass construction."""
+        if not self.habitat_code:
+            raise ValueError("habitat_code must be a non-empty string.")
+        if self.presence_mask.ndim != 2:
+            raise ValueError(
+                f"presence_mask must be 2-D, got shape {self.presence_mask.shape}."
+            )
+        if not (0.0 <= self.threshold <= 1.0):
+            raise ValueError(
+                f"threshold must be in [0.0, 1.0], got {self.threshold}."
+            )
+
+    @property
+    def n_cells(self) -> int:
+        """Number of grid cells occupied by this habitat (count of ``True``)."""
+        return int(np.count_nonzero(self.presence_mask))
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        """Shape ``(rows, cols)`` of the underlying 2-D presence mask."""
+        return self.presence_mask.shape  # type: ignore[return-value]
+
+    def __repr__(self) -> str:
+        return (
+            f"SpatialHabitat("
+            f"habitat_code={self.habitat_code!r}, "
+            f"shape={self.shape}, "
+            f"n_cells={self.n_cells}, "
+            f"threshold={self.threshold:.3f})"
+        )
+
+
+@dataclass(frozen=True)
 class BenchResult:
     """Immutable Value Object holding the results of a kernel benchmark run.
 

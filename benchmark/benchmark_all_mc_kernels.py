@@ -1,20 +1,26 @@
 import os
+import time
 from pathlib import Path
 
+import numpy as np
 from dotenv import load_dotenv
 
+from benchmark.synthetic_habitat import make_overlapping_spatial_habitats
 from pyroclast import (
     FileMapRepository,
     HabitatCriteria,
     PyOpenCLAdapter,
+    PyOpenCLMapCentricAdapter,
     PyOpenCLMonteCarloAdapter,
     PyOpenCLMonteCarloPingPongAdapter,
-    PyOpenCLMonteCarlo2DAdapter,
-    PyOpenCLMonteCarlo2DPingPongAdapter,
-    PyOpenCLMonteCarlo2DTwoBarriersAdapter,
     PyOpenCLMonteCarloVectorizedAdapter,
 )
-from pyroclast.domain.models import BenchResult, GridTopology, MonteCarloConfig
+from pyroclast.domain.models import (
+    BenchResult,
+    CompactedHabitat,
+    GridTopology,
+    MonteCarloConfig,
+)
 from pyroclast.services import run_preprocessing_batch
 
 
@@ -27,16 +33,11 @@ def section(title: str) -> None:
 def _canonical_topology(adapter, n_wg_target: int) -> GridTopology:
     """Build a GridTopology with `n_wg_target` work-groups for any MC adapter.
 
-    Equalises the launch parallelism across 1D and 2D variants so that
-    cross-kernel comparisons aren't confounded by adapter-specific defaults
-    (1D defaults to max_cu*4, 2D defaults to max_cu*8). wg_size stays 256
-    in both cases: the 1D kernel requires it via reqd_work_group_size,
-    and we keep (32, 8) for the 2D family to match its existing shape.
+    Equalises the launch parallelism across the 1-D variants so that
+    cross-kernel comparisons aren't confounded by adapter-specific defaults.
+    wg_size stays 256, which the 1-D kernel requires via reqd_work_group_size.
     """
-    sample = adapter.suggest_topology(1)
-    if isinstance(sample.lws, int):
-        return GridTopology(gws=n_wg_target * 256, lws=256)
-    return GridTopology(gws=(n_wg_target * 32, 8), lws=(32, 8))
+    return GridTopology(gws=n_wg_target * 256, lws=256)
 
 
 def _print_bench(benches: list[BenchResult]) -> None:
@@ -75,6 +76,63 @@ def _with_topology(base: MonteCarloConfig, topology: GridTopology) -> MonteCarlo
         seed=base.seed,
         topology=topology,
     )
+
+
+def _run_map_centric_demo(n_runs: int, seed: int, n_habitats: int) -> None:
+    """Compare Map-Centric (one batched sweep) vs. iterative Habitat-Centric.
+
+    Uses a synthetic, heavily-overlapping multi-habitat scenario — the regime
+    the Map-Centric kernel targets. Real preprocessing compacts away spatial
+    indices, so we synthesise overlapping 2-D habitats here. End-to-end host
+    wall-clock is timed (kernel launches + reduction) for a fair comparison.
+    """
+    section("Monte Carlo — V8 Map-Centric vs. iterative Habitat-Centric")
+
+    p_map, habitats = make_overlapping_spatial_habitats(
+        n_habitats=n_habitats, seed=seed
+    )
+    threshold = habitats[0].threshold
+    cfg = MonteCarloConfig(n_runs=n_runs, threshold=threshold, seed=seed)
+    n_chunks = -(-len(habitats) // 64)  # ceil division
+
+    # ── Map-Centric: a single run_map call (internally chunked by 64) ──
+    mc = PyOpenCLMapCentricAdapter()
+    mc._queue.finish()
+    t0 = time.perf_counter()
+    probs_map = mc.run_map(p_map, habitats, cfg)
+    mc._queue.finish()
+    t_map = (time.perf_counter() - t0) * 1e3
+
+    # ── Habitat-Centric: loop the standard kernel over compacted habitats ──
+    std = PyOpenCLMonteCarloAdapter()
+    p_flat = p_map.ravel()
+    compacted: list[CompactedHabitat] = []
+    for hab in habitats:
+        idx = np.flatnonzero(hab.presence_mask.ravel())
+        compacted.append(
+            CompactedHabitat(
+                habitat_code=hab.habitat_code,
+                n_cells=int(idx.size),
+                p_vec=np.ascontiguousarray(p_flat[idx], dtype=np.float32),
+            )
+        )
+    std._queue.finish()
+    t0 = time.perf_counter()
+    probs_hc = {ch.habitat_code: std.run(ch, cfg) for ch in compacted}
+    std._queue.finish()
+    t_hc = (time.perf_counter() - t0) * 1e3
+
+    max_diff = max(
+        abs(probs_map[code] - probs_hc[code]) for code in probs_hc
+    )
+    speedup = t_hc / t_map if t_map > 0 else float("nan")
+
+    print(f"  config           : R={n_runs:,}  θ={threshold}  seed={seed}")
+    print(f"  habitats         : {len(habitats)}")
+    print(f"  Habitat-Centric  : {t_hc:8.2f} ms  ({len(habitats)} kernel launches)")
+    print(f"  Map-Centric      : {t_map:8.2f} ms  ({n_chunks} kernel launch(es))")
+    print(f"  speedup          : {speedup:.2f}x vs Habitat-Centric")
+    print(f"  max |Δp|         : {max_diff:.4f}  (statistical, streams differ)")
 
 
 def main() -> None:
@@ -130,30 +188,6 @@ def main() -> None:
         n_batches,
     )
 
-    # ── V4 2-D Grid-Stride ───────────────────────────────────────
-    mc_2d = PyOpenCLMonteCarlo2DAdapter(profiling=True)
-    bench_2d = _run_mc(
-        mc_2d, "V4 2-D Grid-Stride", compacted,
-        _with_topology(mc_config, _canonical_topology(mc_2d, n_wg_target)),
-        n_batches,
-    )
-
-    # ── V5 2-D Ping-Pong ─────────────────────────────────────────
-    mc_2d_pp = PyOpenCLMonteCarlo2DPingPongAdapter(profiling=True)
-    bench_2d_pp = _run_mc(
-        mc_2d_pp, "V5 2-D Ping-Pong", compacted,
-        _with_topology(mc_config, _canonical_topology(mc_2d_pp, n_wg_target)),
-        n_batches,
-    )
-
-    # ── V6 2-D Two-Barriers ──────────────────────────────────────
-    mc_2d_2b = PyOpenCLMonteCarlo2DTwoBarriersAdapter(profiling=True)
-    bench_2d_2b = _run_mc(
-        mc_2d_2b, "V6 2-D Two-Barriers", compacted,
-        _with_topology(mc_config, _canonical_topology(mc_2d_2b, n_wg_target)),
-        n_batches,
-    )
-
     # ── V7 Vectorized 1-D (vector RNG) ───────────────────────────────────
     bench_vec: dict[int, list[BenchResult]] = {}
     for w in (2, 4, 8):
@@ -164,26 +198,11 @@ def main() -> None:
             n_batches,
         )
 
-    # ── Sanity: V1 and V4 must produce identical probability at equal n_wg ─
-    section("Sanity: V1 ≡ V4 numerical equivalence")
-    sanity_cfg_1d = _with_topology(mc_config, _canonical_topology(mc_std, n_wg_target))
-    sanity_cfg_2d = _with_topology(mc_config, _canonical_topology(mc_2d, n_wg_target))
-    p_v1 = mc_std.run(compacted[0], sanity_cfg_1d)
-    p_v4 = mc_2d.run(compacted[0], sanity_cfg_2d)
-    assert p_v1 == p_v4, (
-        f"V1 prob ({p_v1:.10f}) != V4 prob ({p_v4:.10f}) — "
-        f"kernel seeding diverged."
-    )
-    print(f"  V1 prob = V4 prob = {p_v1:.6f}  ✓")
-
     # ── Benchmark comparison ─────────────────────────────────────
     section("Benchmark comparison")
     all_runs = [
         ("V1 Standard",     bench_std),
         ("V2 Ping-Pong",    bench_pp),
-        ("V4 2-D Stride",   bench_2d),
-        ("V5 2-D Ping-Pong", bench_2d_pp),
-        ("V6 2-D Two-Barriers", bench_2d_2b),
         ("V7 Vec (w=2)",    bench_vec[2]),
         ("V7 Vec (w=4)",    bench_vec[4]),
         ("V7 Vec (w=8)",    bench_vec[8]),
@@ -208,6 +227,13 @@ def main() -> None:
             print(f"    {label:<16}: {total:7.3f} ms   ({speedup:.2f}x vs V1)")
         else:
             print(f"    {label:<16}: SKIPPED")
+
+    # ── V8 Map-Centric (synthetic overlapping habitats) ──────────
+    _run_map_centric_demo(
+        n_runs=int(os.getenv("MAP_CENTRIC_RUNS", "100000")),
+        seed=mc_config.seed,
+        n_habitats=int(os.getenv("MAP_CENTRIC_HABITATS", "80")),
+    )
 
 
 if __name__ == "__main__":

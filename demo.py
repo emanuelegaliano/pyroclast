@@ -18,9 +18,6 @@ from pyroclast import (
     PyOpenCLAdapter,
     PyOpenCLMonteCarloAdapter,
     PyOpenCLMonteCarloPingPongAdapter,
-    PyOpenCLMonteCarlo2DAdapter,
-    PyOpenCLMonteCarlo2DPingPongAdapter,
-    PyOpenCLMonteCarlo2DTwoBarriersAdapter,
 )
 from pyroclast.domain.models import MonteCarloConfig
 from pyroclast.services import run_preprocessing_batch
@@ -88,9 +85,6 @@ mc_adapter_choice = st.sidebar.selectbox(
     options=[
         "Standard (1-D)",
         "Ping-Pong (1-D)",
-        "Grid-Stride (2-D)",
-        "Ping-Pong (2-D)",
-        "Two-Barriers (2-D)",
     ],
     index=0
 )
@@ -111,9 +105,6 @@ degli habitat a causa della colata lavica, utilizzando il kernel **{mc_adapter_c
 _MC_CHOICES = {
     "Standard (1-D)": PyOpenCLMonteCarloAdapter,
     "Ping-Pong (1-D)": PyOpenCLMonteCarloPingPongAdapter,
-    "Grid-Stride (2-D)": PyOpenCLMonteCarlo2DAdapter,
-    "Ping-Pong (2-D)": PyOpenCLMonteCarlo2DPingPongAdapter,
-    "Two-Barriers (2-D)": PyOpenCLMonteCarlo2DTwoBarriersAdapter,
 }
 
 @st.cache_resource

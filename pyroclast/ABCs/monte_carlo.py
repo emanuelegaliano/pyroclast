@@ -161,8 +161,7 @@ class IMonteCarloAdapter(ABC):
         Returns
         -------
         list[BenchResult]
-            One entry per kernel stage (single-element for 1-D adapters,
-            two elements for the 2-D two-pass adapter).
+            One entry per kernel stage.
 
         Raises
         ------

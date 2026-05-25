@@ -11,9 +11,6 @@ from pyroclast import (
     PyOpenCLAdapter,
     PyOpenCLMonteCarloAdapter,
     PyOpenCLMonteCarloPingPongAdapter,
-    PyOpenCLMonteCarlo2DAdapter,
-    PyOpenCLMonteCarlo2DPingPongAdapter,
-    PyOpenCLMonteCarlo2DTwoBarriersAdapter,
 )
 from pyroclast.domain.models import MonteCarloConfig
 from pyroclast.services import run_preprocessing_batch
@@ -22,9 +19,6 @@ from pyroclast.services.monte_carlo import run_monte_carlo_batch
 _MC_ADAPTER_MAP = {
     "standard": PyOpenCLMonteCarloAdapter,
     "ping_pong": PyOpenCLMonteCarloPingPongAdapter,
-    "2d_stride": PyOpenCLMonteCarlo2DAdapter,
-    "2d_ping_pong": PyOpenCLMonteCarlo2DPingPongAdapter,
-    "2d_two_barriers": PyOpenCLMonteCarlo2DTwoBarriersAdapter,
 }
 
 

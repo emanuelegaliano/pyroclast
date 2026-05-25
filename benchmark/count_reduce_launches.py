@@ -11,12 +11,12 @@ by the sampling kernel) and the reducer's local work-size (256), so:
     257 <= n_wg <= 65k -> 2 launches
     n_wg >  65_536     -> 3 launches
 
-This script sweeps each of the five MC adapter variants across five
-topologies chosen to hit each regime, and prints a table comparing the
-observed launch count (read off ``adapter._reduce_launches`` after each
-run with ``profiling=True``) against the predicted count.
+This script sweeps each MC adapter variant across five topologies chosen
+to hit each regime, and prints a table comparing the observed launch count
+(read off ``adapter._reduce_launches`` after each run with
+``profiling=True``) against the predicted count.
 
-All five variants inherit ``_reduce_partial`` from
+All variants inherit ``_reduce_partial`` from
 ``PyOpenCLMonteCarloAdapter``, so the table is expected to be uniform
 across columns — which is precisely what we want to confirm.
 
@@ -34,15 +34,6 @@ import sys
 
 import numpy as np
 
-from pyroclast.adapters.opencl_mc_2d_pingpong_adapter import (
-    PyOpenCLMonteCarlo2DPingPongAdapter,
-)
-from pyroclast.adapters.opencl_mc_2d_stride_adapter import (
-    PyOpenCLMonteCarlo2DAdapter,
-)
-from pyroclast.adapters.opencl_mc_2d_two_barriers_adapter import (
-    PyOpenCLMonteCarlo2DTwoBarriersAdapter,
-)
 from pyroclast.adapters.opencl_mc_adapter import (
     _REDUCE_LWS,
     PyOpenCLMonteCarloAdapter,
@@ -57,27 +48,19 @@ from pyroclast.domain.models import (
 )
 
 
-# (column label, adapter class, is_2d)
-ADAPTERS: list[tuple[str, type, bool]] = [
-    ("1d_base", PyOpenCLMonteCarloAdapter, False),
-    ("1d_pp", PyOpenCLMonteCarloPingPongAdapter, False),
-    ("2d_stride", PyOpenCLMonteCarlo2DAdapter, True),
-    ("2d_pp", PyOpenCLMonteCarlo2DPingPongAdapter, True),
-    ("2d_2b", PyOpenCLMonteCarlo2DTwoBarriersAdapter, True),
+# (column label, adapter class)
+ADAPTERS: list[tuple[str, type]] = [
+    ("1d_base", PyOpenCLMonteCarloAdapter),
+    ("1d_pp", PyOpenCLMonteCarloPingPongAdapter),
 ]
 
-# (row label, target n_wg, 1-D GridTopology, 2-D GridTopology)
-TOPOLOGIES: list[tuple[str, int, GridTopology, GridTopology]] = [
-    ("tiny",     1,      GridTopology(gws=256,        lws=256),
-                         GridTopology(gws=(32, 8),         lws=(32, 8))),
-    ("small",    64,     GridTopology(gws=16_384,     lws=256),
-                         GridTopology(gws=(2_048, 8),      lws=(32, 8))),
-    ("boundary", 256,    GridTopology(gws=65_536,     lws=256),
-                         GridTopology(gws=(8_192, 8),      lws=(32, 8))),
-    ("medium",   1_024,  GridTopology(gws=262_144,    lws=256),
-                         GridTopology(gws=(32_768, 8),     lws=(32, 8))),
-    ("large",    70_000, GridTopology(gws=17_920_000, lws=256),
-                         GridTopology(gws=(2_240_000, 8),  lws=(32, 8))),
+# (row label, target n_wg, GridTopology)
+TOPOLOGIES: list[tuple[str, int, GridTopology]] = [
+    ("tiny",     1,      GridTopology(gws=256,        lws=256)),
+    ("small",    64,     GridTopology(gws=16_384,     lws=256)),
+    ("boundary", 256,    GridTopology(gws=65_536,     lws=256)),
+    ("medium",   1_024,  GridTopology(gws=262_144,    lws=256)),
+    ("large",    70_000, GridTopology(gws=17_920_000, lws=256)),
 ]
 
 
@@ -108,16 +91,16 @@ def run_one(adapter, topology: GridTopology) -> int:
 
 def main() -> int:
     try:
-        adapters = [(label, cls(profiling=True), is_2d)
-                    for (label, cls, is_2d) in ADAPTERS]
+        adapters = [(label, cls(profiling=True))
+                    for (label, cls) in ADAPTERS]
     except Exception as exc:
         print(f"OpenCL device unavailable, skipping: {exc}")
         return 0
 
-    header_cols = ["topology", "n_wg"] + [lab for (lab, _, _) in ADAPTERS] + [
+    header_cols = ["topology", "n_wg"] + [lab for (lab, _) in ADAPTERS] + [
         "predicted"
     ]
-    widths = [10, 8] + [max(8, len(lab) + 2) for (lab, _, _) in ADAPTERS] + [10]
+    widths = [10, 8] + [max(8, len(lab) + 2) for (lab, _) in ADAPTERS] + [10]
 
     print("== Reduce-launch sweep ==\n")
     header = "  ".join(col.ljust(w) for col, w in zip(header_cols, widths))
@@ -125,10 +108,9 @@ def main() -> int:
     print("-" * len(header))
 
     all_match = True
-    for (row_label, n_wg, topo_1d, topo_2d) in TOPOLOGIES:
+    for (row_label, n_wg, topo) in TOPOLOGIES:
         observed = []
-        for (_lab, adapter, is_2d) in adapters:
-            topo = topo_2d if is_2d else topo_1d
+        for (_lab, adapter) in adapters:
             observed.append(run_one(adapter, topo))
         predicted = predicted_launches(n_wg)
         cells = [row_label, str(n_wg)] + [str(o) for o in observed] + [
@@ -143,7 +125,7 @@ def main() -> int:
 
     print()
     if all_match:
-        print("All five variants match the predicted count for every "
+        print("All variants match the predicted count for every "
               "topology.")
         return 0
     print("Mismatch detected — see rows marked above.")

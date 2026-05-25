@@ -1,7 +1,7 @@
 """Cross-variant consistency: every Monte Carlo adapter must return the
 same probability for the same (habitat, config) tuple.
 
-After the atomic-free refactor, all four sampling kernels still produce
+After the atomic-free refactor, the sampling kernels still produce
 the same trial bits per ``(r, k)`` pair; only the work-group reduction
 shape differs. Integer addition is associative, so the recursive reducer
 yields a bit-exact total regardless of the variant or the number of
@@ -15,9 +15,6 @@ import pytest
 
 from pyroclast.adapters.opencl_mc_adapter import PyOpenCLMonteCarloAdapter
 from pyroclast.adapters.opencl_mc_pingpong_adapter import PyOpenCLMonteCarloPingPongAdapter
-from pyroclast.adapters.opencl_mc_2d_stride_adapter import PyOpenCLMonteCarlo2DAdapter
-from pyroclast.adapters.opencl_mc_2d_pingpong_adapter import PyOpenCLMonteCarlo2DPingPongAdapter
-from pyroclast.adapters.opencl_mc_2d_two_barriers_adapter import PyOpenCLMonteCarlo2DTwoBarriersAdapter
 from pyroclast.domain.models import CompactedHabitat, MonteCarloConfig
 
 
@@ -28,9 +25,6 @@ from pyroclast.domain.models import CompactedHabitat, MonteCarloConfig
 _ADAPTER_FACTORIES = [
     PyOpenCLMonteCarloAdapter,
     PyOpenCLMonteCarloPingPongAdapter,
-    PyOpenCLMonteCarlo2DAdapter,
-    PyOpenCLMonteCarlo2DPingPongAdapter,
-    PyOpenCLMonteCarlo2DTwoBarriersAdapter,
 ]
 
 
@@ -55,7 +49,7 @@ class TestCrossVariantConsistency:
         hab = _habitat([0.5])
         cfg = MonteCarloConfig(n_runs=100_000, threshold=0.0, seed=42)
         results = [a.run(hab, cfg) for a in adapters]
-        # All four adapters draw from the same MWC64X streams; the sample
+        # All adapters draw from the same MWC64X streams; the sample
         # bit per (run, cell) is identical. The total integer count is
         # therefore identical too, regardless of the reduction shape.
         for r in results[1:]:
