@@ -6,6 +6,8 @@ Contains concrete implementations of the compute Ports defined in
 """
 
 from .opencl_adapter import PyOpenCLAdapter
+from .opencl_mc_2d_adapter import PyOpenCLMonteCarlo2DAdapter
+from .opencl_mc_2d_transposed_adapter import PyOpenCLMonteCarlo2DTransposedAdapter
 from .opencl_mc_adapter import PyOpenCLMonteCarloAdapter
 from .opencl_mc_map_centric_adapter import PyOpenCLMapCentricAdapter
 from .opencl_mc_pingpong_adapter import PyOpenCLMonteCarloPingPongAdapter
@@ -21,4 +23,6 @@ __all__ = [
     "PyOpenCLMonteCarloVectorizedAdapter",
     "PyOpenCLMonteCarloVectorizedPingPongAdapter",
     "PyOpenCLMapCentricAdapter",
+    "PyOpenCLMonteCarlo2DAdapter",
+    "PyOpenCLMonteCarlo2DTransposedAdapter",
 ]

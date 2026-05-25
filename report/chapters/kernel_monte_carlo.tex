@@ -256,6 +256,181 @@ The space complexity highlights the critical trade-off of the vectorized approac
     Consequently, the private memory footprint scales linearly with the vector width, becoming $\mathcal{O}(W)$ per work-item. High register pressure is a well-known OpenCL constraint: if a single work-item requests too many registers (e.g., when $W=8$ or $W=16$), the Compute Unit is forced to schedule fewer concurrent wavefronts/warps, directly decreasing the hardware occupancy and potentially negating the SIMD speedup.
 \end{itemize}
 
+\section{Transitioning into 2D Topologies}\label{sec:kernel_2d}
+Every kernel presented so far shares the same skeleton: a one-dimensional grid is launched over the simulation axis $R$, and each work-item walks the $N_c$ cells of the habitat \emph{sequentially} to compute the invaded count $C_r$ of Section \ref{subsec:monte_carlo_run}. This is visible in the recurring sampling term $\mathcal{O}\!\left(\frac{R}{P}\cdot N_c\right)$ of every complexity analysis: the factor $N_c$ is a serial inner loop that no kernel has yet broken. The vectorized kernel of Section \ref{sec:vectorized_kernels} was the first attempt to attack it, but it did so \emph{within} a single work-item, widening each step from one cell to $W$ cells through SIMD registers; the loop itself stayed sequential and the cost was paid in register pressure.
+
+The natural next step is to stop hiding the cell index inside a loop and promote it to a genuine \emph{second grid dimension}. If the run index $r$ lives on one axis and the cell index $k$ on another, then the sum $C_r = \sum_k I_{r,k}$ is no longer a serial scan performed by one thread, but a quantity computed cooperatively by a whole row of threads and then collapsed by a parallel reduction. The destruction assessment $D_r$ and its accumulation over runs become a \emph{second} reduction along the orthogonal axis. This is the idea behind the 2D kernels: a Monte Carlo run is decomposed onto a two-dimensional tile of work-items, and the algorithm closes with two reductions instead of one.
+
+\subsection{Kernel Design}\label{subsec:2d_design}
+The kernel is launched on a two-dimensional \texttt{NDRange}. We call the work-items along the fast axis (\texttt{dim0}) the \emph{cell lanes} and denote their number by $L_c$; the work-items along the slow axis (\texttt{dim1}) are the \emph{run lanes}, denoted $R_r$. A work-group is therefore an $L_c \times R_r$ tile, and its size is $L = L_c \cdot R_r$. The cell axis is sized so that a single work-group spans it entirely (the global size on \texttt{dim0} equals $L_c$), which keeps the cell reduction local to the work-group; the run axis is tiled across many work-groups and, exactly as in the baseline, traversed by a grid-stride loop so that each run lane processes $R / P_r$ runs, where $P_r$ is the global size on the run axis.
+
+\paragraph{Interleaved Cell Partition.}
+How the $N_c$ cells are split among the $L_c$ cell lanes is the decisive design choice, because it dictates the memory access pattern. We adopt an \emph{interleaved} partition: cell lane $L$ is responsible for the cells $L,\, L+L_c,\, L+2L_c, \dots$ This is the same sliding window-$L_c$ sweep that the baseline used over the run axis (Figure \ref{fig:grid_stride_loop}), only applied to the cells, and it is chosen precisely because at every step the $L_c$ lanes of a row touch $L_c$ \emph{consecutive} addresses of \texttt{p\_vec} (Figure \ref{fig:2d_interleaved}). Consecutive work-items hitting consecutive addresses is the textbook condition for a coalesced global load.
+
+\begin{figure}[htpb]
+    \centering
+    \begin{tikzpicture}[
+        lane0/.style={rectangle, draw=black, fill=blue!12,   minimum width=0.9cm, minimum height=0.8cm, font=\sffamily\footnotesize},
+        lane1/.style={rectangle, draw=black, fill=green!12,  minimum width=0.9cm, minimum height=0.8cm, font=\sffamily\footnotesize},
+        lane2/.style={rectangle, draw=black, fill=orange!18, minimum width=0.9cm, minimum height=0.8cm, font=\sffamily\footnotesize},
+        lane3/.style={rectangle, draw=black, fill=red!12,    minimum width=0.9cm, minimum height=0.8cm, font=\sffamily\footnotesize},
+        thr0/.style={rectangle, rounded corners, draw=blue!75,       fill=blue!12,   minimum width=0.9cm, minimum height=0.7cm, font=\sffamily\footnotesize},
+        thr1/.style={rectangle, rounded corners, draw=green!55!black, fill=green!12,  minimum width=0.9cm, minimum height=0.7cm, font=\sffamily\footnotesize},
+        thr2/.style={rectangle, rounded corners, draw=orange!80!black,fill=orange!18, minimum width=0.9cm, minimum height=0.7cm, font=\sffamily\footnotesize},
+        thr3/.style={rectangle, rounded corners, draw=red!70,        fill=red!12,    minimum width=0.9cm, minimum height=0.7cm, font=\sffamily\footnotesize},
+        a0/.style={-{Stealth[scale=1.0]}, thick, blue!75},
+        a1/.style={-{Stealth[scale=1.0]}, thick, green!55!black},
+        a2/.style={-{Stealth[scale=1.0]}, thick, orange!80!black},
+        a3/.style={-{Stealth[scale=1.0]}, thick, red!70}
+    ]
+    % p_vec cells coloured by owning lane (L_c = 4)
+    \node[anchor=south west, font=\sffamily\bfseries] at (0, 1.3) {Probability array \texttt{p\_vec} ($N_c$ cells)};
+    \foreach \i [evaluate=\i as \m using {int(mod(\i,4))}] in {0,...,7} {
+        \node[lane\m] (c\i) at (\i*0.95 + 0.45, 0) {\i};
+    }
+    \node[minimum width=0.9cm, minimum height=0.8cm, font=\sffamily] (cdots) at (8*0.95 + 0.45, 0) {$\cdots$};
+
+    % braces over the two coalesced groups (one read step each)
+    \draw[thick, gray!55!black, decorate, decoration={brace, amplitude=4pt}]
+        (c0.north west) -- (c3.north east)
+        node[midway, above=4pt, font=\sffamily\scriptsize] {coalesced read ($t{=}0$)};
+    \draw[thick, gray!55!black, decorate, decoration={brace, amplitude=4pt}]
+        (c4.north west) -- (c7.north east)
+        node[midway, above=4pt, font=\sffamily\scriptsize] {next read ($t{=}1$)};
+
+    % the four cell lanes, coloured to match the cells they own
+    \foreach \i in {0,...,3} {
+        \node[thr\i] (wi\i) at (\i*0.95 + 0.45, -2.6) {$L_{\i}$};
+    }
+    \node[anchor=north west, font=\sffamily\bfseries] at (0, -3.3)
+        {Cell lanes ($L_c = 4$)};
+
+    % step t=0 : straight solid arrows to cells 0..3
+    \foreach \i in {0,...,3} {
+        \draw[a\i] (wi\i.north) -- (c\i.south);
+    }
+    % step t=1 : straight dashed arrows to cells 4..7 (stride L_c, same colour per lane)
+    \foreach \i in {0,...,3} {
+        \pgfmathtruncatemacro{\target}{\i+4}
+        \draw[a\i, dashed] (wi\i.north) -- (c\target.south);
+    }
+    \end{tikzpicture}
+    \caption{Interleaved cell partition with $L_c = 4$ cell lanes, colour-coded by owner. Lane $L$ owns the cells of its colour ($L, L+L_c, \dots$): the solid arrow is the read at step $t=0$, the dashed arrow the read at step $t=1$, one stride of $L_c$ later. At every step the four lanes touch four consecutive cells of \texttt{p\_vec}, so the global loads are coalesced.}
+    \label{fig:2d_interleaved}
+\end{figure}
+
+This partition also fixes the structure of the random-number stream. To keep the lanes independent while letting each one draw its samples sequentially, cell lane $L$ seeds the MWC64X generator once at the stream position $\texttt{run\_base} + L \cdot G$ and draws $G = \lceil N_c / L_c \rceil$ samples, where a run owns the contiguous segment of length $\texttt{run\_stride} = G \cdot L_c$. No two lanes (and no two runs) ever share a stream position, so statistical independence is preserved exactly as before. The reader will recognise this as \emph{the very same stream layout} as the vectorized kernel with $W = L_c$: the cells of a run are grouped into blocks of $L_c$ and assigned across lanes, only here the ``lanes'' are real work-items rather than SIMD channels. As a consequence the 2D kernel is bit-exact with the vectorized kernel of equal width, but it is \emph{not} bit-exact with the scalar baseline; its correctness is therefore validated statistically through the same proportion Z-test of Section \ref{subsec:tradeoffs_statistical_robustness}. As in the vectorized case, \texttt{p\_vec} is padded up to \texttt{run\_stride} with a $-1.0$ sentinel so that the trailing samples ($k \geq N_c$) satisfy $x \leq -1.0$ trivially and never count as invaded, removing any bounds check from the hot loop.
+
+\paragraph{The Two Reductions.}
+Once every cell lane has finished its strided scan, the run is not yet resolved: each lane holds only a \emph{partial} invaded count over the cells it owns, and these partials must be combined. The kernel does so with two reductions acting on the two orthogonal axes of the tile (Figure \ref{fig:2d_reductions}).
+
+\emph{Reduction 1 --- over the cell lanes.} The $L_c$ partials of a single run row are summed into that run's total invaded count $C_r = \sum_k I_{r,k}$. Each lane writes its partial into a contiguous per-row slice of the local \texttt{scratch} buffer, and the slice is collapsed by the usual power-of-two tree: at each of the $\log_2 L_c$ steps the active lanes halve and every survivor adds the value of its partner, until lane $0$ of the row holds $C_r$. That lane immediately applies the strict-threshold rule of Section \ref{subsec:monte_carlo_run}, $D_r = \mathbbm{1}\!\left[\,C_r / N_c > \theta\,\right]$, and adds the resulting $0/1$ flag to a private accumulator that persists across the $R/P_r$ runs the row visits through the grid-stride loop. Reduction 1 is therefore performed once \emph{per run}, inside the run loop.
+
+\emph{Reduction 2 --- over the run lanes.} When the run loop ends, each of the $R_r$ rows has accumulated, in its own lane $0$, the number of destruction events that row witnessed. A second power-of-two tree --- this time along the run axis, in $\log_2 R_r$ steps --- sums these $R_r$ counts into a single integer: the destruction count of the whole work-group. Work-item $(0,0)$ writes it to \texttt{partial}$[g]$. Exactly as for the one-dimensional kernels, the host then folds the $n_{wg}$ work-group partials into the final count with the shared \texttt{reduce\_sum\_int} reducer and divides by $R$ to obtain $\hat{P}_{\text{destruction}}$.
+
+The point of the construction is that the serial inner sum $C_r = \sum_k I_{r,k}$ --- an $\mathcal{O}(N_c)$ loop buried inside every work-item of the one-dimensional kernels --- has been replaced by the cooperative Reduction 1 of depth $\mathcal{O}(\log_2 L_c)$. This is precisely the inner loop the 2D topology set out to parallelise.
+
+\begin{figure}[htpb]
+    \centering
+    \begin{tikzpicture}[
+        leafc/.style={rectangle, rounded corners, draw=blue!75, fill=blue!12, minimum width=0.85cm, minimum height=0.7cm, font=\sffamily\scriptsize},
+        leafd/.style={rectangle, rounded corners, draw=red!70, fill=red!12, minimum width=0.85cm, minimum height=0.7cm, font=\sffamily\scriptsize},
+        mid/.style={circle, draw=gray!70, fill=gray!12, minimum size=0.55cm, inner sep=0pt, font=\sffamily\scriptsize},
+        rootc/.style={rectangle, draw=red!70!black, fill=red!16, minimum width=0.95cm, minimum height=0.7cm, font=\sffamily\scriptsize},
+        dbox/.style={rectangle, draw=red!70!black, fill=red!16, inner sep=4pt, minimum height=0.7cm, font=\sffamily\scriptsize},
+        rootp/.style={rectangle, draw=green!45!black, fill=green!16, inner sep=4pt, minimum height=0.7cm, font=\sffamily\scriptsize},
+        hostb/.style={rectangle, dashed, draw=green!45!black, fill=green!8, inner sep=4pt, minimum height=0.7cm, font=\sffamily\scriptsize},
+        ed/.style={-{Stealth[scale=0.9]}, semithick, gray!55!black},
+        gd/.style={-{Stealth[scale=0.9]}, semithick, green!45!black}
+    ]
+    % ===== Panel A : Reduction 1 — over cell lanes (one run row) =====
+    \node[font=\sffamily\bfseries] at (1.5, 1.15) {Reduction 1 — over $L_c$ cell lanes};
+    \node[font=\sffamily\scriptsize, text=blue!55!black] at (1.5, 0.62) {(partial invaded counts of run $r$)};
+    \node[leafc] (lA0) at (0.0,0) {$L_0$};
+    \node[leafc] (lA1) at (1.0,0) {$L_1$};
+    \node[leafc] (lA2) at (2.0,0) {$L_2$};
+    \node[leafc] (lA3) at (3.0,0) {$L_3$};
+    \node[mid] (mA0) at (0.5,-1.15) {$+$};
+    \node[mid] (mA1) at (2.5,-1.15) {$+$};
+    \node[rootc] (cA) at (1.5,-2.3) {$C_r$};
+    \node[dbox] (dA) at (1.5,-3.55) {$D_r=\mathbbm{1}\!\left[C_r/N_c>\theta\right]$};
+    \draw[ed] (lA0.south) -- (mA0.north);
+    \draw[ed] (lA1.south) -- (mA0.north);
+    \draw[ed] (lA2.south) -- (mA1.north);
+    \draw[ed] (lA3.south) -- (mA1.north);
+    \draw[ed] (mA0.south) -- (cA.north);
+    \draw[ed] (mA1.south) -- (cA.north);
+    \draw[ed] (cA.south) -- (dA.north);
+
+    % ===== bridge between the two reductions =====
+    \node[font=\sffamily\scriptsize, align=center, text=red!55!black] at (5.0,-0.8)
+        {each of the $R_r$\\run lanes yields\\one flag $D_r$};
+
+    % ===== Panel B : Reduction 2 — over run lanes (work-group g) =====
+    \def\BX{7.0}
+    \node[font=\sffamily\bfseries] at (\BX+1.5, 1.15) {Reduction 2 — over $R_r$ run lanes};
+    \node[font=\sffamily\scriptsize, text=red!55!black] at (\BX+1.5, 0.62) {(per-run destruction flags)};
+    \node[leafd] (lB0) at (\BX+0.0,0) {$D_0$};
+    \node[leafd] (lB1) at (\BX+1.0,0) {$D_1$};
+    \node[leafd] (lB2) at (\BX+2.0,0) {$D_2$};
+    \node[leafd] (lB3) at (\BX+3.0,0) {$D_3$};
+    \node[mid] (mB0) at (\BX+0.5,-1.15) {$+$};
+    \node[mid] (mB1) at (\BX+2.5,-1.15) {$+$};
+    \node[rootp] (pB) at (\BX+1.5,-2.3) {\texttt{partial}$[g]$};
+    \node[hostb] (hB) at (\BX+1.5,-3.55) {host \texttt{reduce\_sum\_int}};
+    \draw[ed] (lB0.south) -- (mB0.north);
+    \draw[ed] (lB1.south) -- (mB0.north);
+    \draw[ed] (lB2.south) -- (mB1.north);
+    \draw[ed] (lB3.south) -- (mB1.north);
+    \draw[ed] (mB0.south) -- (pB.north);
+    \draw[ed] (mB1.south) -- (pB.north);
+    \draw[gd] (pB.south) -- (hB.north);
+
+    % dashed bridge arrow from D_r to the panel-B leaves
+    \draw[ed, dashed] (dA.east) to[out=20, in=200] (lB0.south west);
+    \end{tikzpicture}
+    \caption{The two reductions, shown as binary trees ($L_c = R_r = 4$). \textbf{Reduction~1} (left) sums the $L_c$ cell-lane partials of one run $r$ into the invaded count $C_r$ in $\log_2 L_c$ steps, then lane $0$ derives the destruction flag $D_r$. Each of the $R_r$ run lanes produces one such flag; these are the leaves of \textbf{Reduction~2} (right), which sums them in $\log_2 R_r$ steps into the work-group total \texttt{partial}$[g]$. The host finally folds the $n_{wg}$ work-group partials with \texttt{reduce\_sum\_int}.}
+    \label{fig:2d_reductions}
+\end{figure}
+
+\paragraph{Transposed Launch Grid.}
+Because the two reductions act on orthogonal axes, an obvious question is whether the assignment of those axes to the hardware dimensions matters. To answer it we implement a second kernel that is simply the \emph{transpose} of the first: the run lanes are placed on the fast axis \texttt{dim0} and the cell lanes on \texttt{dim1}, leaving the computation and the partition of work untouched. Since the mapping $(r,k) \mapsto$ stream position is unchanged and integer addition is associative, the transposed kernel returns a result that is \emph{bit-exact} with its non-transposed sibling; what differs is only the memory behaviour of the sampling and of Reduction 1, examined next. The transposed variant therefore exists not to be faster, but to \emph{isolate and measure} the cost of the launch-grid mapping, all other factors being identical.
+
+\paragraph{Coalescing and Bank Conflicts.}
+Two distinct memory effects separate the two launch grids, and both favour the non-transposed kernel. They concern, respectively, the global reads of \texttt{p\_vec} (which dominate the kernel's global traffic) and the local-memory accesses of the cell reduction.
+
+\emph{Global-memory coalescing.} On a GPU the work-items of a warp issue their global loads together, and the hardware is fastest when those loads fall on consecutive addresses, which it can then service with a single \emph{coalesced} transaction. In the non-transposed grid the cell lanes occupy the fast dimension, so a warp carries consecutive values of $L$ and, at step $t$, reads the consecutive addresses $\texttt{p\_vec}[\,t L_c + L\,]$: a textbook coalesced load (this is exactly the alignment depicted in Figure \ref{fig:2d_interleaved}). In the transposed grid the fast dimension is the run axis, so a warp holds a \emph{fixed} cell index $L$ and varying run lanes; all of its work-items request the \emph{same} address. The hardware serves this as a broadcast --- efficient in isolation, but it no longer streams a contiguous span of \texttt{p\_vec} across the warp, forfeiting the wide-load advantage.
+
+\emph{Local-memory bank conflicts.} Shared (local) memory is split into $32$ banks, and a warp completes a local access in one cycle only if its threads hit $32$ distinct banks; threads landing on the same bank are serialised. The non-transposed kernel stores a run's partials in a contiguous slice $\texttt{scratch}[\,\rho \cdot L_c + L\,]$, so the threads combined at each step of Reduction 1 are one word apart (stride $1$) and necessarily map to distinct banks --- the reduction is conflict-free, by the same argument as the map-centric layout of Section \ref{subsec:map_centric_design}. The transposed kernel indexes the very same data as $\texttt{scratch}[\,L \cdot R_r + \rho\,]$, so the partners of a reduction step lie $R_r$ words apart; since $R_r$ is a power of two it shares its factors with the $32$ banks, several threads of a warp collide on the same bank, and each reduction step is serialised.
+
+Neither penalty is catastrophic in practice: \texttt{p\_vec} is only a few hundred kilobytes and resides comfortably in the L2 cache, which absorbs much of the difference in the global-read pattern, while the cell reduction is a small $\log_2 L_c$ fraction of the kernel's work. The transposed kernel is therefore slower than the non-transposed one but not dramatically so; the benchmark of Section \ref{sec:benchmark} quantifies the residual gap.
+
+\subsection{Algorithmic Complexity}\label{subsec:2d_complexity}
+The complexity is expressed in terms of the two new structural parameters $L_c$ and $R_r$ (with $L = L_c \cdot R_r$), the run-axis global size $P_r$, and the familiar $R$ and $N_c$.
+
+\paragraph{Time Complexity.}
+The sampling phase is now shared by the cell lanes, while the closing of a run involves the two reductions:
+\begin{itemize}
+    \item \textbf{Sampling and Monte Carlo Run}: each run lane processes $R / P_r$ runs; within a run, the $N_c$ cells are split across the $L_c$ lanes, so each lane draws only $G = \lceil N_c / L_c \rceil$ samples. The sampling work per run lane is therefore $\mathcal{O}\!\left(\frac{R}{P_r}\cdot\frac{N_c}{L_c}\right)$.
+    \item \textbf{Reduction 1 (cells):} performed once per run inside the grid-stride loop, the cell-lane tree reduction costs $\mathcal{O}(\log_2 L_c)$, for a total of $\mathcal{O}\!\left(\frac{R}{P_r}\log_2 L_c\right)$.
+    \item \textbf{Reduction 2 (runs):} performed once at the end, the run-lane tree reduction costs $\mathcal{O}(\log_2 R_r)$.
+\end{itemize}
+\noindent
+The overall time complexity is thus
+\begin{equation}
+    T(N_c, R, P_r, L_c, R_r) = \mathcal{O}\!\left(\frac{R}{P_r}\left(\frac{N_c}{L_c} + \log_2 L_c\right) + \log_2 R_r\right)
+\label{eq:2d_kernel_time_complexity}
+\end{equation}
+A subtlety deserves emphasis. If the total number of work-items $P = L_c \cdot P_r$ is held equal to that of the one-dimensional launch, the sampling term reduces to $\frac{R}{P_r}\cdot\frac{N_c}{L_c} = \frac{R}{P}\cdot N_c$, i.e. exactly the cost of Equation \ref{eq:standard_kernel_time_complexity}: the same $R \cdot N_c$ samples are simply spread over the same number of threads. In pure Big-$\mathcal{O}$ terms the 2D kernel is therefore not cheaper---if anything the extra $\frac{R}{P_r}\log_2 L_c$ of the per-run reduction makes it marginally heavier. As with vectorization, the benefit is architectural rather than asymptotic: the long serial inner scan of length $N_c$ is replaced by a shallow $\log_2 L_c$ tree, and the cell lanes now issue wide coalesced loads instead of the strided single-cell accesses of the baseline.
+
+\paragraph{Space Complexity.}
+The space hierarchy reveals where the 2D approach pays, and where it economises with respect to the vectorized kernel:
+\begin{itemize}
+    \item \textbf{Global Memory}: the kernel reads \texttt{p\_vec} (padded up to a multiple of $L_c$) of size $\mathcal{O}(N_c)$, and writes one integer per work-group, i.e. an output array of size $n_{wg} = P_r / R_r$. The total global memory complexity is $\mathcal{O}(N_c + P_r / R_r)$.
+    \item \textbf{Local Memory}: a single dynamic \texttt{scratch} buffer serves both reductions: $L_c \cdot R_r$ integers for the cell reduction plus a further $R_r$ for the run reduction, i.e. $L + R_r$ integers, which is $\mathcal{O}(L)$ per work-group---the same order as the standard kernel.
+    \item \textbf{Private Memory}: each work-item keeps only its own partial invaded count, a destruction accumulator, the RNG state and a handful of loop counters, for a strictly constant $\mathcal{O}(1)$ footprint. This is the key contrast with the vectorized kernel: the 2D design achieves cell-level parallelism by distributing the work across \emph{work-items and local memory} rather than across \emph{vector registers}, so it avoids the $\mathcal{O}(W)$ register pressure that throttles occupancy at large widths---trading it instead for the local-memory traffic and the barriers of the two reductions.
+\end{itemize}
+
 \section{Kernel Map-Centric}\label{sec:kernel_map_centric}
 In addition to the standard habitat-centric kernel design, we also explored a map-centric approach. All the kernels presented so far are \emph{habitat-centric}: each launch operates on a single habitat through its stream-compacted probability vector \texttt{p\_vec}, sampling only the cells that belong to that habitat. When several habitats overlap geographically, however, the same map cell belongs to more than one habitat, and the habitat-centric design re-samples it---drawing a fresh pseudo-random number---once per overlapping habitat. The \emph{map-centric} kernel inverts this mapping: it sweeps the entire geographic map a single time, draws exactly one sample per cell, and propagates the outcome to every habitat that occupies that cell in the same pass. Overlap therefore costs no additional random numbers.
 

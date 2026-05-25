@@ -174,3 +174,98 @@ def make_overlapping_spatial_habitats(
         f"overlap≈{overlap_ratio:.2f}x  threshold={threshold}"
     )
     return p_map, habitats
+
+
+def make_overlapping_habitats_over_map(
+    p_map: np.ndarray,
+    n_habitats: int = 64,
+    block_frac: float = 0.30,
+    threshold: float = 0.005,
+    seed: int = 42,
+) -> list[SpatialHabitat]:
+    """Lay many *overlapping* habitats over the active region of a real map.
+
+    Unlike :func:`make_overlapping_spatial_habitats`, which synthesises its own
+    Beta probability map, this takes an existing **real** probability map and
+    places ``n_habitats`` rectangular blocks confined to its *active* region
+    (cells with ``p > 0``). Each block is centred on a random active cell and
+    intersected with the active mask, so every habitat's cells have ``p > 0``
+    (non-degenerate destruction probabilities) and every habitat is non-empty.
+
+    This is the regime where the Map-Centric kernel can win: the blocks overlap
+    heavily, so the union footprint (one RNG draw per cell) is far smaller than
+    the sum of per-habitat cell counts (which the Habitat-Centric kernels
+    re-sample once per habitat).
+
+    Parameters
+    ----------
+    p_map : numpy.ndarray
+        2-D ``float32`` real invasion-probability map. The active region is
+        ``p_map > 0``.
+    n_habitats : int
+        Number of overlapping habitats to generate. Default: 64 (fills one
+        ``ulong`` bitmask exactly, a single Map-Centric launch).
+    block_frac : float
+        Side length of each block as a fraction of the *active bounding box*
+        dimensions. Larger ⇒ bigger blocks ⇒ more overlap. Default: 0.30.
+    threshold : float
+        Per-habitat destruction threshold θ.
+    seed : int
+        NumPy RNG seed for reproducibility.
+
+    Returns
+    -------
+    list[SpatialHabitat]
+        ``n_habitats`` overlapping habitats aligned to ``p_map`` (full-grid
+        ``presence_mask``). The union footprint and overlap ratio are printed.
+    """
+    rows, cols = p_map.shape
+    risk = p_map > 0.0
+    active = np.flatnonzero(risk.ravel())
+    if active.size == 0:
+        raise ValueError("p_map has no active (p > 0) cells.")
+
+    # Bounding box of the active region; blocks are sized relative to it.
+    active_rows = np.flatnonzero(risk.any(axis=1))
+    active_cols = np.flatnonzero(risk.any(axis=0))
+    r_lo, r_hi = int(active_rows[0]), int(active_rows[-1])
+    c_lo, c_hi = int(active_cols[0]), int(active_cols[-1])
+    bh = max(1, int(round(block_frac * (r_hi - r_lo + 1))))
+    bw = max(1, int(round(block_frac * (c_hi - c_lo + 1))))
+
+    rng = np.random.default_rng(seed)
+    habitats: list[SpatialHabitat] = []
+    union = np.zeros(p_map.shape, dtype=bool)
+    total_cells = 0
+    for h in range(n_habitats):
+        # Centre the block on a random active cell -> the intersection with the
+        # active mask is guaranteed non-empty.
+        flat_centre = int(rng.choice(active))
+        cr, cc = divmod(flat_centre, cols)
+        r0 = min(max(r_lo, cr - bh // 2), max(r_lo, r_hi - bh + 1))
+        c0 = min(max(c_lo, cc - bw // 2), max(c_lo, c_hi - bw + 1))
+        block = np.zeros(p_map.shape, dtype=bool)
+        block[r0 : r0 + bh, c0 : c0 + bw] = True
+        mask = block & risk  # keep only active cells -> p > 0
+        habitats.append(
+            SpatialHabitat(
+                habitat_code=f"SYN{h:03d}",
+                presence_mask=mask,
+                threshold=threshold,
+            )
+        )
+        union |= mask
+        total_cells += int(mask.sum())
+
+    n_grid = rows * cols
+    n_union = int(union.sum())
+    overlap_ratio = total_cells / n_union if n_union else 0.0
+    print(
+        f"[habitats_over_map] grid={rows}x{cols} ({n_grid:,} cells)  "
+        f"active(p>0)={active.size:,} ({100 * active.size / n_grid:.1f}%)  "
+        f"n_habitats={n_habitats}  block={bh}x{bw}  "
+        f"sum(cells)={total_cells:,}  union={n_union:,} "
+        f"({100 * n_union / n_grid:.1f}% of grid)  "
+        f"overlap≈{overlap_ratio:.2f}x  threshold={threshold}"
+    )
+    return habitats

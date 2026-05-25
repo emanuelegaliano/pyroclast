@@ -4,6 +4,8 @@ from .domain import CompactedHabitat, GridTopology, SpatialHabitat
 from .adapters import (
     PyOpenCLAdapter,
     PyOpenCLMapCentricAdapter,
+    PyOpenCLMonteCarlo2DAdapter,
+    PyOpenCLMonteCarlo2DTransposedAdapter,
     PyOpenCLMonteCarloAdapter,
     PyOpenCLMonteCarloPingPongAdapter,
     PyOpenCLMonteCarloVectorizedAdapter,
@@ -29,6 +31,8 @@ __all__ = [
     "PyOpenCLMonteCarloVectorizedAdapter",
     "PyOpenCLMonteCarloVectorizedPingPongAdapter",
     "PyOpenCLMapCentricAdapter",
+    "PyOpenCLMonteCarlo2DAdapter",
+    "PyOpenCLMonteCarlo2DTransposedAdapter",
     # Domain
     "CompactedHabitat",
     "GridTopology",
