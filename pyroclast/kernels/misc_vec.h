@@ -16,7 +16,7 @@
 #ifndef MISC_VEC_H
 #define MISC_VEC_H
 
-#include "misc.h"   /* scalar MWC64X_SeedStreams + _to_float helpers */
+#include "misc.h"   // scalar MWC64X_SeedStreams + _to_float helpers 
 
 #ifndef VEC_WIDTH
 #define VEC_WIDTH 2

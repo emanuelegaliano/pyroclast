@@ -178,7 +178,84 @@ The space complexity highlights the main architectural trade-off of the double-b
     \item \textbf{Local Memory}: To eliminate synchronization hazards with fewer barriers, each work-group allocates \textit{two} shared arrays instead of one: a primary \texttt{scratch1} array of size $L$ and a secondary \texttt{scratch2} array of size $L/2$. While asymptotically this is still $\mathcal{O}(L)$ per work-group, the absolute footprint is strictly $1.5 \times L$. This increased local memory usage directly reduces the maximum hardware occupancy (number of active work-groups) on the Compute Units.
     
     \item \textbf{Private Memory}: Each work-item maintains the usual local state variables alongside a new \texttt{val} register used to carry the running sum across loop iterations safely. This still requires a constant amount of memory, resulting in a private space complexity of $\mathcal{O}(1)$ per work-item.
+\end{itemize}ù
+
+\section{Vectorized Kernels}\label{sec:vectorized_kernels}
+One of the ideas of this project was to explore the potential performance benefits of vectorization in the Monte Carlo kernel. By leveraging the SIMD (Single Instruction, Multiple Data) capabilities of modern GPUs, we can process multiple data elements in parallel within a single work-item, potentially improving throughput and reducing execution time.
+
+\subsection{Vectorized Random Number Generation}\label{subsec:vectorized_rng}
+The transition from a scalar to a vectorized Monte Carlo kernel requires a structural adaptation in the generation of pseudo-random numbers. As implemented in the \texttt{misc\_vec.h} header and its underlying OpenCL definitions, the vectorized approach replaces scalar state variables with native OpenCL vector types (e.g., \texttt{uint2}, \texttt{uint4}, or \texttt{uint8}). Instead of generating a single random number per step, the generator advances \texttt{VEC\_WIDTH} independent lanes concurrently.
+
+By advancing the MWC64X generator with bitwise and arithmetic operations directly on vector types, the OpenCL compiler can map these calculations to single hardware vector instructions, thereby increasing the Instruction-Level Parallelism. Furthermore, processing a block of \texttt{VEC\_WIDTH} cells within a single loop iteration significantly increases the ratio of useful arithmetic work to loop-control overhead, maximizing the overall throughput (i.e., evaluated elements per second).
+
+\paragraph{Stream Independence and Seeding.}
+A critical requirement for the validity of the Monte Carlo method is ensuring that no two work-items---and no two vector lanes within a single work-item---sample the same sequence of pseudo-random numbers. Is guaranteed this stream independence, by the use of an external library, at two distinct levels:
+\begin{description}
+    \item[Inter-thread Independence:] As for the baseline standard kernel, each simulation run relies on a \texttt{base\_offset} provided by the host. The starting point in the stream is calculated as a function of the global simulation ID ($r$), ensuring that each run operates on a mathematically disjoint segment of the generator's $2^{63}$ period.
+    
+    \item[Intra-thread (Lane) Independence:] When using a vector state (e.g., \texttt{uint4}), the internal structure must maintain independent seeds for each of its channels. The specific initialization functions (such as \texttt{MWC64XVEC4\_SeedStreams}) do not simply duplicate the same seed across the vector. Instead, they apply a deterministic mathematical skip, assigning a unique internal offset (ranging from $0$ to $\texttt{VEC\_WIDTH} - 1$) to each individual lane.
+\end{description}
+
+\subsection{Trade-offs and Statistical Robustness}\label{subsec:tradeoffs_statistical_robustness}
+The vectorized kernel design offers significant performance advantages by maximizing the use of SIMD capabilities. However, this approach also introduces a trade-off in terms of the statistical properties of the generated random numbers. Since each lane in the vectorized generator is initialized with a different offset, the sequence of random numbers produced by each lane will differ from the sequence that would be generated in a scalar implementation. This means that while the vectorized kernel maintains statistical robustness (i.e., it produces statistically valid random numbers), it does not produce the same sequence of random numbers as the scalar version for a given seed.
+
+\paragraph{Z-test.}
+To mitigate this issue, we can perform a proportion Z-test\footnote{A common statistical test used to compare the proportions of two independent samples.} on the outputs of the scalar and vectorized kernels. We define:
+\begin{itemize}
+    \item $H_0$: The probability of habitat destruction estimated by the scalar kernel is equal to the probability estimated by the vectorized kernel. That means 
+    \[
+    \hat{P}_{\text{destruction, scalar}} = \hat{P}_{\text{destruction, vectorized}}
+    \]
+    \item $H_1$: The probability of habitat destruction estimated by the scalar kernel is not equal to the probability estimated by the vectorized kernel. That means 
+    \[
+    \hat{P}_{\text{destruction, scalar}} \neq \hat{P}_{\text{destruction, vectorized}}
+    \]
 \end{itemize}
+
+\noindent
+To perform the test, we need to collect the following data:
+\begin{itemize}
+    \item \textbf{Simulations}: We run $R$ simulation on both kernels and record the number of simulations that resulted in habitat destruction for each kernel, denoted as $D_{\text{scalar}}$ and $D_{\text{vectorized}}$ respectively.
+    \item \textbf{Significance Level}: We choose a significance level $\alpha$ (commonly set to 0.05) to determine the threshold for rejecting the null hypothesis. If the p-value of the test is less than $\alpha$, we reject $H_0$ and conclude that there is a statistically significant difference between the two kernels. Otherwise, we fail to reject $H_0$ and conclude that there is no statistically significant difference in the estimated probabilities of habitat destruction between the scalar and vectorized implementations.
+\end{itemize}
+
+\textbf{TODO: insert figure}
+
+\paragraph{Chi-square test.}
+Alternatively, we can perform a chi-square test for independence on the contingency table of outcomes (destruction vs. no destruction) for both kernels. This test will allow us to determine if there is a significant association between the type of kernel used and the outcome of the simulations. The null hypothesis $H_0$ would state that the kernel type and the outcome are independent, while the alternative hypothesis $H_1$ would state that there is a dependence between the kernel type and the outcome.
+
+\textbf{TODO: insert figure}
+
+
+\subsection{Algorithmic Complexity}\label{subsec:algorithmic_complexity_vectorized}
+The theoretical time and space complexity of the vectorized kernel introduces the vector width $W$ (defined as \texttt{VEC\_WIDTH}) as a new fundamental hardware parameter. While the high-level grid-stride loop and tree reduction structures remain identical to the scalar baselines, the per-cell workload is drastically altered.
+
+\paragraph{Time Complexity.}
+The time complexity can still be divided into the two principal components (Monte Carlo sampling and Local Memory reduction). However, the sampling phase is now accelerated by the SIMD execution:
+\begin{description}
+    \item[Sampling and Monte Carlo Run:] The kernel still iterates over the runs with a total of $R/P$ iterations per work-item. However, within each run, the inner loop no longer iterates exactly $N_c$ times. Instead, the habitat is processed in chunks of size $W$, resulting in $G = \lceil N_c / W \rceil$ iterations. In each iteration, a single OpenCL vector instruction processes $W$ cells simultaneously.
+    \item[Reduction:] The local memory tree reduction remains strictly unchanged, operating over the $L$ work-items of the work-group, yielding $\mathcal{O}(\log_2 L)$.
+\end{description}
+
+\noindent
+The overall time complexity of the vectorized kernel is therefore expressed as:
+\begin{equation}
+    T(N_c, R, P, L, W) = \mathcal{O}\left(\frac{R}{P} \cdot \frac{N_c}{W} + \log_2 L\right)
+\label{eq:vectorized_kernel_time_complexity}
+\end{equation}
+Strictly speaking in terms of Big-$\mathcal{O}$ asymptotic notation, $W$ is a hardware constant, making this mathematically equivalent to Equation \ref{eq:standard_kernel_time_complexity}. In GPGPU practice, however, the explicit division by $W$ represents a tangible reduction in loop-control overhead and a massive increase in actual memory throughput via wider coalesced loads (\texttt{vload$W$}).
+
+\paragraph{Space Complexity.}
+The space complexity highlights the critical trade-off of the vectorized approach, specifically regarding the GPU registers allocation:
+\begin{itemize}
+    \item \textbf{Global Memory}: The \texttt{p\_vec} array requires a slight ceiling padding to ensure its size is a multiple of $W$, preventing out-of-bounds memory accesses during the final \texttt{vload$W$}. The complexity remains identically $\mathcal{O}(N_c + P/L)$.
+    
+    \item \textbf{Local Memory}: The vectorized sampling can be seamlessly plugged into either the standard or the double-buffering (ping-pong) reduction shells. Thus, the local memory footprint is independent of $W$ and remains either $\mathcal{O}(L)$ or $\mathcal{O}(1.5 \times L)$ per work-group, depending on the chosen reduction adapter.
+    
+    \item \textbf{Private Memory (Register Pressure)}: This is where the vectorized kernel differs most. Instead of maintaining a few scalar state variables, each work-item must allocate hardware registers to hold vector types: a $W$-wide state for the RNG (\texttt{VEC\_STATE\_T}), a $W$-wide accumulator (\texttt{INTV acc}), and $W$-wide buffers for probabilities and drawn floats. 
+    Consequently, the private memory footprint scales linearly with the vector width, becoming $\mathcal{O}(W)$ per work-item. High register pressure is a well-known OpenCL constraint: if a single work-item requests too many registers (e.g., when $W=8$ or $W=16$), the Compute Unit is forced to schedule fewer concurrent wavefronts/warps, directly decreasing the hardware occupancy and potentially negating the SIMD speedup.
+\end{itemize}
+
 
 \section{Transitioning to 2D Architectures}\label{sec:transitioning_2d_architectures}
 
