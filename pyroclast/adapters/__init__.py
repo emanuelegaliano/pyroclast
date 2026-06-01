@@ -9,6 +9,7 @@ from .opencl_adapter import PyOpenCLAdapter
 from .opencl_mc_2d_adapter import PyOpenCLMonteCarlo2DAdapter
 from .opencl_mc_2d_transposed_adapter import PyOpenCLMonteCarlo2DTransposedAdapter
 from .opencl_mc_adapter import PyOpenCLMonteCarloAdapter
+from .opencl_mc_commutative_adapter import PyOpenCLMonteCarloCommutativeAdapter
 from .opencl_mc_map_centric_adapter import PyOpenCLMapCentricAdapter
 from .opencl_mc_pingpong_adapter import PyOpenCLMonteCarloPingPongAdapter
 from .opencl_mc_vectorized_adapter import PyOpenCLMonteCarloVectorizedAdapter
@@ -19,6 +20,7 @@ from .opencl_mc_vectorized_pingpong_adapter import (
 __all__ = [
     "PyOpenCLAdapter",
     "PyOpenCLMonteCarloAdapter",
+    "PyOpenCLMonteCarloCommutativeAdapter",
     "PyOpenCLMonteCarloPingPongAdapter",
     "PyOpenCLMonteCarloVectorizedAdapter",
     "PyOpenCLMonteCarloVectorizedPingPongAdapter",
