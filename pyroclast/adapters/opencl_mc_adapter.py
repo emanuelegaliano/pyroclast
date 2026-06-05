@@ -94,6 +94,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
     """
 
     _SAMPLING_KERNEL_NAME: str = "monte_carlo_run"
+    _MULTI_SAMPLING_KERNEL_NAME: str = "monte_carlo_run_multi"
 
     def __init__(
         self,
@@ -103,7 +104,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
     ) -> None:
         if kernel_path is None:
             kernel_path = (
-                Path(__file__).parent.parent / "kernels" / "monte_carlo.cl"
+                Path(__file__).parent.parent / "kernels" / "monte_carlo" / "monte_carlo.cl"
             )
         kernel_path = Path(kernel_path)
         if not kernel_path.is_file():
@@ -112,7 +113,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
             )
 
         reduce_kernel_path = (
-            Path(__file__).parent.parent / "kernels" / "reduce_sum.cl"
+            Path(__file__).parent.parent / "kernels" / "reduction" / "reduce_sum.cl"
         )
         if not reduce_kernel_path.is_file():
             raise FileNotFoundError(
@@ -134,6 +135,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
         self._reduce_launches: list[tuple[float, int]] = []
         self._last_n_cells: int = 0
         self._last_n_wg: int = 0
+        self._last_kernel_name: str = self._SAMPLING_KERNEL_NAME
 
         self._kernel_path = kernel_path
         self._mwc64x_include = (
@@ -268,6 +270,98 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
         self._queue.finish()
         return int(final[0])
 
+    def _compile_multi_on_demand(self) -> None:
+        """Compile the multi-habitat sampling and reduction kernels if not already done."""
+        if hasattr(self, "_multi_program"):
+            return
+
+        stem = self._kernel_path.parent / f"{self._kernel_path.stem}_multi.cl"
+        if not stem.is_file():
+            raise FileNotFoundError(
+                f"Multi-habitat OpenCL kernel not found at: {stem}"
+            )
+
+        reduce_multi_kernel_path = (
+            Path(__file__).parent.parent / "kernels" / "reduction" / "reduce_sum_batched.cl"
+        )
+        if not reduce_multi_kernel_path.is_file():
+            raise FileNotFoundError(
+                f"OpenCL batched reducer kernel not found at: {reduce_multi_kernel_path}"
+            )
+
+        kernel_source = stem.read_text(encoding="utf-8")
+        try:
+            self._multi_program = cl.Program(
+                self._ctx, kernel_source
+            ).build(options=f"-I {self._mwc64x_include} -I {self._kernel_dir} -DWG_SIZE={self._compiled_wg_size} {self._extra_build_options}")
+        except cl.RuntimeError as exc:
+            raise RuntimeError(
+                f"OpenCL multi-habitat kernel compilation failed.\n"
+                f"Kernel path: {stem}\n"
+                f"Build log:\n{exc}"
+            ) from exc
+
+        reduce_source = reduce_multi_kernel_path.read_text(encoding="utf-8")
+        try:
+            self._reduce_multi_program = cl.Program(
+                self._ctx, reduce_source
+            ).build(options=f"-DREDUCE_WG_SIZE={_REDUCE_LWS}")
+        except cl.RuntimeError as exc:
+            raise RuntimeError(
+                f"OpenCL batched reducer kernel compilation failed.\n"
+                f"Kernel path: {reduce_multi_kernel_path}\n"
+                f"Build log:\n{exc}"
+            ) from exc
+
+        self._multi_kernel = cl.Kernel(
+            self._multi_program, self._MULTI_SAMPLING_KERNEL_NAME
+        )
+        self._reduce_multi_kernel = cl.Kernel(
+            self._reduce_multi_program, "reduce_sum_int_batched"
+        )
+        logger.info(
+            "PyOpenCLMonteCarloAdapter: multi-habitat kernels '%s' and 'reduce_sum_int_batched' compiled.",
+            self._MULTI_SAMPLING_KERNEL_NAME,
+        )
+
+    def _reduce_partial_batched(
+        self,
+        partial_a: cl.Buffer,
+        partial_b: cl.Buffer,
+        n_elems_in: int,
+        n_habitats: int,
+    ) -> np.ndarray:
+        """Recursively reduce partial_a to N final ints, one per habitat."""
+        src, dst = partial_a, partial_b
+        while n_elems_in > 1:
+            n_wg = max(1, math.ceil(n_elems_in / _REDUCE_LWS))
+            gws_x = n_wg * _REDUCE_LWS
+            gws = (gws_x, n_habitats)
+            lws = (_REDUCE_LWS, 1)
+
+            evt = self._reduce_multi_kernel(
+                self._queue,
+                gws,
+                lws,
+                dst,
+                src,
+                cl.LocalMemory(4 * _REDUCE_LWS),
+                np.uint32(n_elems_in),
+                np.uint32(n_habitats),
+            )
+            if self._profiling:
+                evt.wait()
+                elapsed_ms = (evt.profile.end - evt.profile.start) * 1e-6
+                total_bytes = (n_elems_in + n_wg) * 4 * n_habitats
+                self._reduce_launches.append((elapsed_ms, total_bytes))
+            src, dst = dst, src
+            n_elems_in = n_wg
+
+        final = np.zeros(n_habitats, dtype=np.int32)
+        cl.enqueue_copy(self._queue, final, src)
+        self._queue.finish()
+        return final
+
     # ------------------------------------------------------------------
     # IMonteCarloAdapter API
     # ------------------------------------------------------------------
@@ -321,6 +415,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
                 elapsed_ms = (event.profile.end - event.profile.start) * 1e-6
                 self._last_n_cells = habitat.n_cells
                 self._last_n_wg = n_wg
+                self._last_kernel_name = self._SAMPLING_KERNEL_NAME
                 total_bytes = self.get_bytes_read(
                     habitat, config.n_runs
                 ) + self.get_bytes_written(habitat, config.n_runs)
@@ -406,6 +501,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
                     ) * 1e-6
                     self._last_n_cells = habitat.n_cells
                     self._last_n_wg = n_wg
+                    self._last_kernel_name = self._SAMPLING_KERNEL_NAME
                     total_bytes = self.get_bytes_read(
                         habitat, batch_size
                     ) + self.get_bytes_written(habitat, batch_size)
@@ -434,6 +530,103 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
             config.threshold,
         )
         return prob
+
+    def run_multi_habitats(
+        self,
+        habitats: list[CompactedHabitat],
+        config: MonteCarloConfig,
+    ) -> list[float]:
+        """Estimate destruction probability for multiple habitats simultaneously via GPU."""
+        if not habitats:
+            return []
+
+        self._compile_multi_on_demand()
+
+        n_habitats = len(habitats)
+        n_runs = config.n_runs
+
+        p_stride = max(h.n_cells for h in habitats)
+        if p_stride == 0:
+            return [0.0] * n_habitats
+
+        p_vecs_host = np.full(n_habitats * p_stride, -1.0, dtype=np.float32)
+        n_cells_host = np.zeros(n_habitats, dtype=np.uint32)
+        for h_idx, h in enumerate(habitats):
+            n_cells_host[h_idx] = h.n_cells
+            start = h_idx * p_stride
+            p_vecs_host[start : start + h.n_cells] = np.asarray(h.p_vec, dtype=np.float32)
+
+        topology = config.topology or self.suggest_topology(n_runs)
+        gws_runs = topology.gws[0] if isinstance(topology.gws, tuple) else topology.gws
+        lws_runs = topology.lws[0] if isinstance(topology.lws, tuple) else topology.lws
+
+        if lws_runs != self._compiled_wg_size:
+            self._recompile(lws_runs)
+            if hasattr(self, "_multi_program"):
+                delattr(self, "_multi_program")
+            self._compile_multi_on_demand()
+
+        n_wg_runs = gws_runs // lws_runs
+
+        mf = cl.mem_flags
+        p_buf: cl.Buffer | None = None
+        n_cells_buf: cl.Buffer | None = None
+        partial_a: cl.Buffer | None = None
+        partial_b: cl.Buffer | None = None
+
+        try:
+            p_buf = cl.Buffer(
+                self._ctx,
+                mf.READ_ONLY | mf.COPY_HOST_PTR,
+                hostbuf=p_vecs_host,
+            )
+            n_cells_buf = cl.Buffer(
+                self._ctx,
+                mf.READ_ONLY | mf.COPY_HOST_PTR,
+                hostbuf=n_cells_host,
+            )
+            partial_a = cl.Buffer(
+                self._ctx, mf.READ_WRITE, size=n_habitats * n_wg_runs * 4
+            )
+            partial_b = cl.Buffer(
+                self._ctx, mf.READ_WRITE, size=n_habitats * max(1, n_wg_runs) * 4
+            )
+
+            gws_sampling = (gws_runs,)
+            lws_sampling = (lws_runs,)
+
+            event = self._multi_kernel(
+                self._queue,
+                gws_sampling,
+                lws_sampling,
+                p_buf,
+                n_cells_buf,
+                partial_a,
+                np.uint32(p_stride),
+                np.float32(config.threshold),
+                np.uint64(int(config.seed)),
+                np.uint32(n_runs),
+                np.uint32(n_habitats),
+            )
+
+            if self._profiling:
+                event.wait()
+                elapsed_ms = (event.profile.end - event.profile.start) * 1e-6
+                self._last_n_cells = p_stride
+                self._last_n_wg = n_wg_runs
+                self._last_kernel_name = self._MULTI_SAMPLING_KERNEL_NAME
+                total_bytes = (n_runs * sum(h.n_cells for h in habitats) * 4) + (n_habitats * n_wg_runs * 4)
+                self._kernel_launches.append((elapsed_ms, total_bytes))
+
+            total_counts = self._reduce_partial_batched(partial_a, partial_b, n_wg_runs, n_habitats)
+
+        finally:
+            for buf in (p_buf, n_cells_buf, partial_a, partial_b):
+                if buf is not None:
+                    buf.release()
+
+        probs = [float(count) / n_runs for count in total_counts]
+        return probs
 
     def reset_profile(self) -> None:
         """Clear accumulated kernel timing data."""
@@ -488,7 +681,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
         sample_bw = sample_bytes / sample_time_s / 1e9 if sample_time_s > 0 else 0.0
         memory_mb = (self._last_n_cells * 4 + self._last_n_wg * 4 * 2) / 1e6
         results.append(BenchResult(
-            kernel_name=self._SAMPLING_KERNEL_NAME,
+            kernel_name=self._last_kernel_name,
             shape=(self._last_n_cells, 1),
             n_cells=self._last_n_cells,
             n_runs=len(sample_times),

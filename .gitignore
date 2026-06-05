@@ -6,3 +6,5 @@ __pycache__/
 .pytest_cache/
 before_pushing.sh
 report/out/
+temp.md
+csv_results/

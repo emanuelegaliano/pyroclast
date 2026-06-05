@@ -63,7 +63,7 @@ class PyOpenCLMonteCarlo2DAdapter(PyOpenCLMonteCarloAdapter):
         self._run_lanes = run_lanes
         if kernel_path is None:
             kernel_path = (
-                Path(__file__).parent.parent / "kernels" / "monte_carlo_2d.cl"
+                Path(__file__).parent.parent / "kernels" / "monte_carlo" / "monte_carlo_2d.cl"
             )
         super().__init__(kernel_path=kernel_path, profiling=profiling)
         logger.info(

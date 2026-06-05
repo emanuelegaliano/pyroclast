@@ -61,6 +61,15 @@
 static int _run_trial_vec(__global const float* p_vec, uint n_cells,
                           float threshold, ulong base_offset, uint r) {
     const uint  G          = (n_cells + VEC_WIDTH - 1u) / VEC_WIDTH;
+
+#ifdef NO_RNG
+    INTV acc = (INTV)(0);
+    for (uint t = 0u; t < G; t++) {
+        FLOATV pv  = VLOADW(0, p_vec + (size_t)t * VEC_WIDTH);
+        FLOATV x   = (FLOATV)(0.5f);
+        acc -= (x <= pv);   /* relational op yields -1 (true) / 0 per lane */
+    }
+#else
     const ulong run_stride = (ulong)G * (ulong)VEC_WIDTH;
     const ulong run_base   = base_offset + (ulong)r * run_stride;
 
@@ -83,6 +92,7 @@ static int _run_trial_vec(__global const float* p_vec, uint n_cells,
         FLOATV x   = CVT_FLOATV(rnd >> 8u) * (1.0f / 16777216.0f);
         acc -= (x <= pv);   /* relational op yields -1 (true) / 0 per lane */
     }
+#endif
     uint invaded = (uint)VSUM(acc);
     return ((float)invaded / (float)n_cells) > threshold;
 }

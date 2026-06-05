@@ -3,6 +3,11 @@ from .ABCs import MapRepository, MapCriteria, RasterMap, MapRepositoryStrategy, 
 from .domain import CompactedHabitat, GridTopology, SpatialHabitat
 from .adapters import (
     PyOpenCLAdapter,
+    PyOpenCLHostScalarCompactionAdapter,
+    PyOpenCLHostNonzeroCompactionAdapter,
+    PyOpenCLHostCompressCompactionAdapter,
+    PyOpenCLGPUScalarCompactionAdapter,
+    PyOpenCLGPUVectorizedCompactionAdapter,
     PyOpenCLMapCentricAdapter,
     PyOpenCLMonteCarlo2DAdapter,
     PyOpenCLMonteCarlo2DTransposedAdapter,
@@ -12,7 +17,7 @@ from .adapters import (
     PyOpenCLMonteCarloVectorizedAdapter,
     PyOpenCLMonteCarloVectorizedPingPongAdapter,
 )
-from .services import run_preprocessing_batch
+from .services import run_preprocessing_batch, generate_synthetic_habitat_dem
 
 __all__ = [
     # Repository layer
@@ -27,6 +32,11 @@ __all__ = [
     # Compute layer
     "IComputeAdapter",
     "PyOpenCLAdapter",
+    "PyOpenCLHostScalarCompactionAdapter",
+    "PyOpenCLHostNonzeroCompactionAdapter",
+    "PyOpenCLHostCompressCompactionAdapter",
+    "PyOpenCLGPUScalarCompactionAdapter",
+    "PyOpenCLGPUVectorizedCompactionAdapter",
     "PyOpenCLMonteCarloAdapter",
     "PyOpenCLMonteCarloCommutativeAdapter",
     "PyOpenCLMonteCarloPingPongAdapter",
@@ -41,4 +51,5 @@ __all__ = [
     "SpatialHabitat",
     # Services
     "run_preprocessing_batch",
+    "generate_synthetic_habitat_dem",
 ]

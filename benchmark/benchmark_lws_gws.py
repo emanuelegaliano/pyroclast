@@ -1,137 +1,161 @@
-"""LWS & GWS Parameter Sweep Standalone Benchmark.
+"""LWS & GWS Parameter Sweep Benchmark.
 
-This script executes a dense grid parameter tuning sweep over various 
-Local Work Size (LWS) and Global Work Size (GWS) combinations using the selected 1-D Monte Carlo kernel.
-Results are saved to 'benchmark/lws_gws_benchmark.csv' for Jupyter Notebook plotting.
+Performs a dense parameter sweep over various Local Work Size (LWS) and Global Work Size (GWS)
+combinations using OpenCL event profiling. Generates a performance heatmap.
+Saves results to `csv_results/lws_gws_sweep.csv` and produces a plot saved to `csv_results/lws_gws_heatmap.png`.
 """
 
 from __future__ import annotations
 
-import argparse
-import math
 import os
+import time
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import rasterio
 
 from pyroclast import (
-    FileMapRepository,
-    HabitatCriteria,
     PyOpenCLAdapter,
-    PyOpenCLMonteCarloAdapter,
-    PyOpenCLMonteCarloPingPongAdapter,
-    PyOpenCLMonteCarloVectorizedAdapter,
+    PyOpenCLMonteCarloCommutativeAdapter,
+    generate_synthetic_habitat_dem,
 )
 from pyroclast.domain.models import GridTopology, MonteCarloConfig
-from pyroclast.services import run_preprocessing_batch
 
 
-KERNELS = {
-    "1D-standard": PyOpenCLMonteCarloAdapter,
-    "1D-ping-pong": PyOpenCLMonteCarloPingPongAdapter,
-    # Vectorized-RNG variants (factories carry the vec_width).
-    "1D-vec2": lambda profiling=False: PyOpenCLMonteCarloVectorizedAdapter(profiling=profiling, vec_width=2),
-    "1D-vec4": lambda profiling=False: PyOpenCLMonteCarloVectorizedAdapter(profiling=profiling, vec_width=4),
-    "1D-vec8": lambda profiling=False: PyOpenCLMonteCarloVectorizedAdapter(profiling=profiling, vec_width=8),
-}
-
-KERNEL_SELECTED = "1D-standard"
-
-def main() -> None:
-    
-
-    # 2. Setup environment and load map data
+def main(results_dir: Path | str | None = None, save_figures: bool = True) -> None:
     load_dotenv()
     data_path = os.getenv("DATA_PATH", "data").strip('"\'')
-    cache_dir = Path(os.getenv("CACHE_DIR", str(Path(data_path) / "cache")).strip('"\''))
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    invasion_map = os.getenv("INVASION_MAP", "").strip('"\'') or None
+    dem_path = os.getenv("DEM_PATH")
+    if not dem_path:
+        dem_path = str(Path(data_path) / "dem.tif")
 
-    print("Executing Preprocessing pipeline to obtain compacted habitat maps...")
-    repo = FileMapRepository(data_path, invasion_map=invasion_map)
-    preprocess_adapter = PyOpenCLAdapter()
-    compacted = run_preprocessing_batch(
-        repo=repo,
-        compute=preprocess_adapter,
-        criteria=HabitatCriteria(),
-        cache_dir=cache_dir,
+    if not Path(dem_path).is_file():
+        raise FileNotFoundError(
+            f"DEM file not found at: {dem_path}. Please check DEM_PATH in .env or data folder."
+        )
+
+    # 1. Load DEM
+    print(f"Loading DEM from {dem_path}...")
+    with rasterio.open(dem_path) as src:
+        dem = src.read(1).astype(np.float32)
+        if src.nodata is not None:
+            dem[dem == src.nodata] = np.nan
+
+    # 2. Generate synthetic habitat
+    print("Generating synthetic habitat based on DEM...")
+    hab_map, inv_map = generate_synthetic_habitat_dem(
+        dem=dem,
+        occupancy_fraction=0.3,
+        mean_p=0.5,
+        seed=42,
+        habitat_code="SYNTH_LWS_GWS",
     )
 
-    if not compacted:
-        print("Error: No habitats found in data path. Benchmark aborted.")
-        sys.exit(1)
-        
+    preprocess_adapter = PyOpenCLAdapter()
+    compacted = preprocess_adapter.batch_preprocess(inv_map, [hab_map])
     target_habitat = compacted[0]
-    print(f"Selected Habitat for Benchmarks: '{target_habitat.habitat_code}' ({target_habitat.n_cells:,} active cells)")
+    print(f"Target Habitat: '{target_habitat.habitat_code}' ({target_habitat.n_cells:,} active cells)")
 
-    kernel_label = KERNEL_SELECTED
-    adapter_cls = KERNELS.get(kernel_label)
-    if adapter_cls is None:
-        print(f"Error: Invalid kernel selection '{kernel_label}'. Available options: {list(KERNELS.keys())}")
-        sys.exit(1)
-    adapter = adapter_cls(profiling=True)
+    # 3. Setup configurations
+    mc_runs = 1048576  # 2^20 (approx 1M) simulations for clean power-of-two scaling
+    threshold = 0.005
+    seed = 42
 
+    adapter = PyOpenCLMonteCarloCommutativeAdapter(profiling=True)
     device = adapter._ctx.devices[0]
     gpu_name = device.name.strip()
-    print(f"Detected GPU for benchmarking: '{gpu_name}'")
-    print(f"Running LWS & GWS Parameter Tuning Sweep on '{kernel_label}' Monte Carlo kernel...")
+    print(f"Hardware: {gpu_name} (Max Compute Units: {device.max_compute_units})")
 
-    # 4. Sweep Parameters
-    MC_RUNS_BENCH = 1_000_000
-    THRESHOLD = 0.005
-    SEED = 42
+    if results_dir is None:
+        import re
+        sanitized = re.sub(r'[^\w\-_.]', '_', gpu_name)
+        sanitized = re.sub(r'_+', '_', sanitized)
+        gpu_folder = sanitized.strip('_')
+        results_dir = Path("csv_results") / gpu_folder
+    else:
+        results_dir = Path(results_dir)
 
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    # 4. Define parameter options
     lws_options = [64, 128, 256, 512]
-    # step of 512
-    gws_options = list(range(512, 16384 + 1, 512))
+    # We sweep GWS to cover under-saturated to fully saturated GPU threads
+    gws_options = [16384, 32768, 65536, 131072, 262144, 524288, 1048576]
 
+    print("Running LWS & GWS parameter sweep...")
     bench_results = []
-    
+
     for gws in gws_options:
         for lws in lws_options:
+            if gws < lws:
+                continue
+
             topology = GridTopology(gws=gws, lws=lws)
-            # Instantiate new MonteCarloConfig to prevent dataclass FrozenInstanceError
             config = MonteCarloConfig(
-                n_runs=MC_RUNS_BENCH,
-                threshold=THRESHOLD,
-                seed=SEED,
-                topology=topology
+                n_runs=mc_runs,
+                threshold=threshold,
+                seed=seed,
+                topology=topology,
             )
 
-        
-            adapter.reset_profile()               
-            adapter.run(target_habitat, config)
-
-            bench = adapter.benchmark()[0]
-            mean_ms = bench.mean_ms
-            throughput = MC_RUNS_BENCH / (mean_ms / 1000.0)
+            trial_times = []
+            for _ in range(3):
+                adapter.reset_profile()
+                adapter.run(target_habitat, config)
+                
+                bench_results_gpu = adapter.benchmark()
+                gpu_time = sum(b.mean_ms * b.n_runs for b in bench_results_gpu)
+                trial_times.append(gpu_time)
+            
+            best_time = min(trial_times)
+            throughput = mc_runs / (best_time / 1000.0)
 
             bench_results.append({
                 "LWS": lws,
                 "GWS": gws,
-                "Time (ms)": mean_ms,
+                "Time (ms)": best_time,
                 "Throughput (Sim/s)": throughput,
-                "GPU": gpu_name,
-                "Kernel": kernel_label
             })
-            print(f"  Completed LWS={lws}, GWS={gws} | Mean Time: {mean_ms:.2f} ms", end="\r")
+            print(f"  Completed LWS={lws:<4} GWS={gws:<6} | GPU Time: {best_time:7.2f} ms")
 
-    print("\nBenchmark sweep completed. Processing data...")
-    df_bench = pd.DataFrame(bench_results)
+    # 5. Process results
+    df = pd.DataFrame(bench_results)
+    
+    # Save CSV
+    csv_path = results_dir / "lws_gws_sweep.csv"
+    df.to_csv(csv_path, index=False)
+    print(f"Saved CSV results to: {csv_path}")
 
-    # 5. Calculate Standardized Time relative performance (Deviation from Mean %) at each GWS
-    gws_means = df_bench.groupby("GWS")["Time (ms)"].mean().to_dict()
-    df_bench["Deviation from Mean (%)"] = df_bench.apply(
-        lambda row: (row["Time (ms)"] / gws_means[row["GWS"]] - 1) * 100,
-        axis=1
-    )
+    # 6. Pivot for Heatmap plotting
+    if save_figures:
+        pivot_df = df.pivot(index="GWS", columns="LWS", values="Throughput (Sim/s)")
+        # Divide throughput by 1e6 to represent in Millions of simulations per second
+        pivot_df = pivot_df / 1e6
 
-    # 6. Save results to CSV file
-    csv_path = Path(__file__).parent / "lws_gws_benchmark.csv"
-    df_bench.to_csv(csv_path, index=False)
-    print(f"Successfully exported benchmark results to: {csv_path.resolve()}")
+        # 7. Plotting
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(
+            pivot_df,
+            annot=True,
+            fmt=".2f",
+            cmap="viridis",
+            cbar_kws={"label": "Throughput (Million Sim/s)"},
+            linewidths=0.5,
+        )
+        plt.title(f"Parameter Tuning Heatmap (Throughput vs. LWS/GWS)\nGPU: {gpu_name}")
+        plt.xlabel("Local Work Size (LWS)")
+        plt.ylabel("Global Work Size (GWS)")
+
+        plt.tight_layout()
+        plot_path = results_dir / "lws_gws_heatmap.png"
+        plt.savefig(plot_path, dpi=150)
+        plt.close()
+        print(f"Saved heatmap image to: {plot_path}")
+
 
 if __name__ == "__main__":
     main()

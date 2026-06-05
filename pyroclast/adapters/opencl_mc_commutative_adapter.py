@@ -34,18 +34,26 @@ class PyOpenCLMonteCarloCommutativeAdapter(PyOpenCLMonteCarloAdapter):
     ``run()`` / ``run_batched()`` / ``benchmark()`` interface.
     """
 
+    _MULTI_SAMPLING_KERNEL_NAME = "monte_carlo_commutative_multi"
+
     def __init__(
         self,
         kernel_path: Path | None = None,
         profiling: bool = False,
+        extra_build_options: str = "",
     ) -> None:
         if kernel_path is None:
             kernel_path = (
                 Path(__file__).parent.parent
                 / "kernels"
+                / "monte_carlo"
                 / "monte_carlo_commutative.cl"
             )
-        super().__init__(kernel_path=kernel_path, profiling=profiling)
+        super().__init__(
+            kernel_path=kernel_path,
+            profiling=profiling,
+            extra_build_options=extra_build_options,
+        )
         logger.info(
             "PyOpenCLMonteCarloCommutativeAdapter initialized with kernel: %s",
             Path(kernel_path).name,

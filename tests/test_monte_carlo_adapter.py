@@ -39,8 +39,9 @@ def _config(
     n_runs: int = 200_000,
     threshold: float = 0.5,
     seed: int = 42,
+    topology = None,
 ) -> MonteCarloConfig:
-    return MonteCarloConfig(n_runs=n_runs, threshold=threshold, seed=seed)
+    return MonteCarloConfig(n_runs=n_runs, threshold=threshold, seed=seed, topology=topology)
 
 
 # ---------------------------------------------------------------------------
@@ -149,8 +150,7 @@ class TestDynamicWorkgroupSize:
         hab = _habitat([0.4, 0.6, 0.2, 0.8, 0.1, 0.9])
         # Force a specific LWS and GWS (GWS must be a multiple of LWS)
         topology = GridTopology(gws=lws * 4, lws=lws)
-        cfg = _config(seed=42)
-        cfg.topology = topology
+        cfg = _config(seed=42, topology=topology)
 
         # This will trigger compilation if needed, run successfully, and produce valid results
         prob = adapter.run(hab, cfg)
@@ -163,12 +163,12 @@ class TestDynamicWorkgroupSize:
         cfg = _config(seed=1337)
 
         # Run with LWS = 128
-        cfg.topology = GridTopology(gws=512, lws=128)
-        p_128 = adapter.run(hab, cfg)
+        cfg_128 = _config(seed=1337, topology=GridTopology(gws=512, lws=128))
+        p_128 = adapter.run(hab, cfg_128)
 
         # Run with LWS = 256
-        cfg.topology = GridTopology(gws=512, lws=256)
-        p_256 = adapter.run(hab, cfg)
+        cfg_256 = _config(seed=1337, topology=GridTopology(gws=512, lws=256))
+        p_256 = adapter.run(hab, cfg_256)
 
         assert p_128 == p_256
 

@@ -20,12 +20,17 @@ class PyOpenCLMonteCarloPingPongAdapter(PyOpenCLMonteCarloAdapter):
         self,
         kernel_path: Path | None = None,
         profiling: bool = False,
+        extra_build_options: str = "",
     ) -> None:
         if kernel_path is None:
             kernel_path = (
-                Path(__file__).parent.parent / "kernels" / "monte_carlo_pingpong.cl"
+                Path(__file__).parent.parent / "kernels" / "monte_carlo" / "monte_carlo_pingpong.cl"
             )
-        super().__init__(kernel_path=kernel_path, profiling=profiling)
+        super().__init__(
+            kernel_path=kernel_path,
+            profiling=profiling,
+            extra_build_options=extra_build_options,
+        )
         logger.info(
             "PyOpenCLMonteCarloPingPongAdapter initialized with kernel: %s",
             kernel_path.name,

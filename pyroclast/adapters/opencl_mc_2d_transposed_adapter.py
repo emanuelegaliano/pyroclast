@@ -35,6 +35,7 @@ class PyOpenCLMonteCarlo2DTransposedAdapter(PyOpenCLMonteCarlo2DAdapter):
             kernel_path = (
                 Path(__file__).parent.parent
                 / "kernels"
+                / "monte_carlo"
                 / "monte_carlo_2d_transposed.cl"
             )
         super().__init__(

@@ -44,6 +44,7 @@ pyroclast.kernels.preprocessing.cl : the OpenCL kernel source.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Sequence
 from importlib.resources import files
 from pathlib import Path
@@ -156,7 +157,7 @@ class PyOpenCLAdapter(IComputeAdapter):
     ) -> None:
         if kernel_path is None:
             kernel_path = (
-                Path(__file__).parent.parent / "kernels" / "preprocessing.cl"
+                Path(__file__).parent.parent / "kernels" / "preprocessing" / "preprocessing.cl"
             )
         kernel_path = Path(kernel_path)
         if not kernel_path.is_file():
@@ -303,26 +304,22 @@ class PyOpenCLAdapter(IComputeAdapter):
 
                     cl.enqueue_copy(self._queue, out_flat, out_buf)
                     self._queue.finish()
-
-                    if self._profiling:
-                        elapsed_ms = (
-                            event.profile.end - event.profile.start
-                        ) * 1e-6
-                        total_bytes = self.get_bytes_read(
-                            invasion_map, habitat
-                        ) + self.get_bytes_written(invasion_map, habitat)
-                        self._kernel_launches.append(
-                            (elapsed_ms, total_bytes)
-                        )
                 finally:
                     if h_buf is not None:
                         h_buf.release()
                     if out_buf is not None:
                         out_buf.release()
 
-                mask: np.ndarray = out_flat > 0.0
-                p_vec: np.ndarray = out_flat[mask].copy()
+                t0_comp = time.perf_counter()
+                p_vec = self._compact(out_flat)
+                t_comp_ms = (time.perf_counter() - t0_comp) * 1e3
                 n_cells = int(p_vec.size)
+
+                if self._profiling:
+                    elapsed_ms = (event.profile.end - event.profile.start) * 1e-6 if event is not None else 0.0
+                    total_time_ms = elapsed_ms + t_comp_ms
+                    total_bytes = self.get_bytes_read(invasion_map, habitat) + self.get_bytes_written(invasion_map, habitat)
+                    self._kernel_launches.append((total_time_ms, total_bytes))
 
                 results.append(
                     CompactedHabitat(
@@ -341,6 +338,11 @@ class PyOpenCLAdapter(IComputeAdapter):
             p_buf.release()
 
         return results
+
+    def _compact(self, out_flat: np.ndarray) -> np.ndarray:
+        """Perform host-side stream compaction using NumPy boolean masking."""
+        mask = out_flat > 0.0
+        return out_flat[mask].copy()
 
     def reset_profile(self) -> None:
         """Clear accumulated kernel timing data."""
@@ -401,3 +403,328 @@ class PyOpenCLAdapter(IComputeAdapter):
             bandwidth_gbs=bandwidth_gbs,
             memory_mb=memory_mb,
         )]
+
+
+class PyOpenCLHostScalarCompactionAdapter(PyOpenCLAdapter):
+    """Host-side stream compaction using a pure Python scalar loop (list comprehension)."""
+    
+    def _compact(self, out_flat: np.ndarray) -> np.ndarray:
+        return np.array([x for x in out_flat if x > 0.0], dtype=np.float32)
+
+
+class PyOpenCLHostNonzeroCompactionAdapter(PyOpenCLAdapter):
+    """Host-side stream compaction using NumPy flatnonzero."""
+    
+    def _compact(self, out_flat: np.ndarray) -> np.ndarray:
+        return out_flat[np.flatnonzero(out_flat)].copy()
+
+
+class PyOpenCLHostCompressCompactionAdapter(PyOpenCLAdapter):
+    """Host-side stream compaction using NumPy compress."""
+    
+    def _compact(self, out_flat: np.ndarray) -> np.ndarray:
+        return np.compress(out_flat > 0.0, out_flat)
+
+
+class PyOpenCLGPUScalarCompactionAdapter(PyOpenCLAdapter):
+    """GPU-side stream compaction using scalar prefix scan and compaction kernels."""
+    
+    def batch_preprocess(
+        self,
+        invasion_map: RasterMap,
+        habitats: Sequence[RasterMap],
+    ) -> list[CompactedHabitat]:
+        if not habitats:
+            return []
+
+        p_flat = np.ascontiguousarray(
+            invasion_map.data.ravel(), dtype=np.float32
+        )
+        total_cells = p_flat.size
+        self._last_n_cells = total_cells
+        self._last_shape = (invasion_map.data.shape[0], invasion_map.data.shape[1])
+        mf = cl.mem_flags
+
+        p_buf = cl.Buffer(
+            self._ctx,
+            mf.READ_ONLY | mf.COPY_HOST_PTR,
+            hostbuf=p_flat,
+        )
+
+        results = []
+        try:
+            k_map = cl.Kernel(self._program, "map_multiply")
+            k_gen_pred = cl.Kernel(self._program, "generate_predicates")
+            k_scan = cl.Kernel(self._program, "scan_scalar_k")
+            k_corr = cl.Kernel(self._program, "scan_correction_scalar_k")
+            k_compact = cl.Kernel(self._program, "stream_compaction_scalar_k")
+
+            for habitat in habitats:
+                if habitat.data.shape != invasion_map.data.shape:
+                    raise ValueError(
+                        f"Habitat '{habitat.code}' shape {habitat.data.shape} "
+                        f"does not match invasion map shape {invasion_map.data.shape}."
+                    )
+
+                h_flat = np.ascontiguousarray(
+                    habitat.data.ravel(), dtype=np.uint8
+                )
+
+                h_buf = cl.Buffer(self._ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=h_flat)
+                out_buf = cl.Buffer(self._ctx, mf.READ_WRITE, size=p_flat.nbytes)
+                predicates_buf = cl.Buffer(self._ctx, mf.READ_WRITE, size=total_cells * 4)
+                scanned_predicates_buf = cl.Buffer(self._ctx, mf.READ_WRITE, size=total_cells * 4)
+
+                LWS = 256
+                nwg = min(64, (total_cells + LWS - 1) // LWS)
+                code_buf = cl.Buffer(self._ctx, mf.READ_WRITE, size=nwg * 4)
+
+                # 1. Run map_multiply
+                evt_map = k_map(self._queue, (total_cells,), None, p_buf, h_buf, out_buf, np.int32(total_cells))
+                
+                # 2. Run generate_predicates
+                evt_gen = k_gen_pred(self._queue, (total_cells,), None, h_buf, predicates_buf, np.int32(total_cells))
+
+                # 3. Run scan_scalar_k
+                lmem = cl.LocalMemory(LWS * 4)
+                evt_scan = k_scan(
+                    self._queue,
+                    (nwg * LWS,),
+                    (LWS,),
+                    scanned_predicates_buf,
+                    code_buf,
+                    predicates_buf,
+                    lmem,
+                    np.int32(total_cells)
+                )
+
+                # 4. Correct group-level sums if nwg > 1
+                evt_corr = None
+                code_scanned_buf = None
+                code_host = np.empty(nwg, dtype=np.int32)
+                cl.enqueue_copy(self._queue, code_host, code_buf)
+                self._queue.finish()
+
+                if nwg > 1:
+                    code_scanned = np.cumsum(code_host).astype(np.int32)
+                    n_cells = int(code_scanned[-1])
+
+                    code_scanned_buf = cl.Buffer(self._ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=code_scanned)
+                    evt_corr = k_corr(
+                        self._queue,
+                        (nwg * LWS,),
+                        (LWS,),
+                        scanned_predicates_buf,
+                        code_scanned_buf,
+                        np.int32(total_cells)
+                    )
+                else:
+                    n_cells = int(code_host[0])
+
+                if n_cells == 0:
+                    p_vec = np.array([], dtype=np.float32)
+                    evt_comp = None
+                else:
+                    compacted_p_buf = cl.Buffer(self._ctx, mf.WRITE_ONLY, size=n_cells * 4)
+                    
+                    # 5. Run stream_compaction_scalar_k
+                    comp_gws = ((total_cells + LWS - 1) // LWS) * LWS
+                    evt_comp = k_compact(
+                        self._queue,
+                        (comp_gws,),
+                        (LWS,),
+                        out_buf,
+                        scanned_predicates_buf,
+                        predicates_buf,
+                        compacted_p_buf,
+                        np.int32(total_cells)
+                    )
+                    
+                    p_vec = np.empty(n_cells, dtype=np.float32)
+                    cl.enqueue_copy(self._queue, p_vec, compacted_p_buf)
+                    self._queue.finish()
+                    compacted_p_buf.release()
+
+                # Clean up per-habitat buffers
+                h_buf.release()
+                out_buf.release()
+                predicates_buf.release()
+                scanned_predicates_buf.release()
+                code_buf.release()
+                if code_scanned_buf is not None:
+                    code_scanned_buf.release()
+
+                results.append(
+                    CompactedHabitat(
+                        habitat_code=habitat.code,
+                        n_cells=n_cells,
+                        p_vec=p_vec,
+                    )
+                )
+
+                if self._profiling:
+                    total_evt_time = sum(
+                        (evt.profile.end - evt.profile.start) * 1e-6
+                        for evt in [evt_map, evt_gen, evt_scan, evt_corr, evt_comp]
+                        if evt is not None
+                    )
+                    total_bytes = self.get_bytes_read(invasion_map, habitat) + (n_cells * 4)
+                    self._kernel_launches.append((total_evt_time, total_bytes))
+        finally:
+            p_buf.release()
+
+        return results
+
+
+class PyOpenCLGPUVectorizedCompactionAdapter(PyOpenCLAdapter):
+    """GPU-side stream compaction using vectorized (int4) prefix scan and compaction kernels."""
+    
+    def batch_preprocess(
+        self,
+        invasion_map: RasterMap,
+        habitats: Sequence[RasterMap],
+    ) -> list[CompactedHabitat]:
+        if not habitats:
+            return []
+
+        p_flat = np.ascontiguousarray(
+            invasion_map.data.ravel(), dtype=np.float32
+        )
+        total_cells = p_flat.size
+        nquads = (total_cells + 3) // 4
+        self._last_n_cells = total_cells
+        self._last_shape = (invasion_map.data.shape[0], invasion_map.data.shape[1])
+        mf = cl.mem_flags
+
+        p_buf = cl.Buffer(
+            self._ctx,
+            mf.READ_ONLY | mf.COPY_HOST_PTR,
+            hostbuf=p_flat,
+        )
+
+        results = []
+        try:
+            k_map = cl.Kernel(self._program, "map_multiply")
+            k_gen_pred = cl.Kernel(self._program, "generate_predicates")
+            k_scan = cl.Kernel(self._program, "scan_k")
+            k_corr = cl.Kernel(self._program, "scan_correction_k")
+            k_compact = cl.Kernel(self._program, "stream_compaction_k")
+
+            for habitat in habitats:
+                if habitat.data.shape != invasion_map.data.shape:
+                    raise ValueError(
+                        f"Habitat '{habitat.code}' shape {habitat.data.shape} "
+                        f"does not match invasion map shape {invasion_map.data.shape}."
+                    )
+
+                h_flat = np.ascontiguousarray(
+                    habitat.data.ravel(), dtype=np.uint8
+                )
+
+                h_buf = cl.Buffer(self._ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=h_flat)
+                out_buf = cl.Buffer(self._ctx, mf.READ_WRITE, size=p_flat.nbytes)
+                
+                predicates_host = np.zeros(nquads * 4, dtype=np.int32)
+                predicates_buf = cl.Buffer(self._ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=predicates_host)
+                scanned_predicates_buf = cl.Buffer(self._ctx, mf.READ_WRITE, size=nquads * 16)
+
+                LWS = 256
+                nwg = min(64, (nquads + LWS - 1) // LWS)
+                code_buf = cl.Buffer(self._ctx, mf.READ_WRITE, size=nwg * 4)
+
+                # 1. Run map_multiply
+                evt_map = k_map(self._queue, (total_cells,), None, p_buf, h_buf, out_buf, np.int32(total_cells))
+                
+                # 2. Run generate_predicates
+                evt_gen = k_gen_pred(self._queue, (total_cells,), None, h_buf, predicates_buf, np.int32(total_cells))
+
+                # 3. Run scan_k
+                lmem = cl.LocalMemory(LWS * 4)
+                evt_scan = k_scan(
+                    self._queue,
+                    (nwg * LWS,),
+                    (LWS,),
+                    scanned_predicates_buf,
+                    code_buf,
+                    predicates_buf,
+                    lmem,
+                    np.int32(nquads)
+                )
+
+                # 4. Correct group-level sums if nwg > 1
+                evt_corr = None
+                code_scanned_buf = None
+                code_host = np.empty(nwg, dtype=np.int32)
+                cl.enqueue_copy(self._queue, code_host, code_buf)
+                self._queue.finish()
+
+                if nwg > 1:
+                    code_scanned = np.cumsum(code_host).astype(np.int32)
+                    n_cells = int(code_scanned[-1])
+
+                    code_scanned_buf = cl.Buffer(self._ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=code_scanned)
+                    evt_corr = k_corr(
+                        self._queue,
+                        (nwg * LWS,),
+                        (LWS,),
+                        scanned_predicates_buf,
+                        code_scanned_buf,
+                        np.int32(nquads)
+                    )
+                else:
+                    n_cells = int(code_host[0])
+
+                if n_cells == 0:
+                    p_vec = np.array([], dtype=np.float32)
+                    evt_comp = None
+                else:
+                    compacted_p_buf = cl.Buffer(self._ctx, mf.WRITE_ONLY, size=n_cells * 4)
+                    
+                    # 5. Run stream_compaction_k
+                    comp_gws = ((nquads + LWS - 1) // LWS) * LWS
+                    evt_comp = k_compact(
+                        self._queue,
+                        (comp_gws,),
+                        (LWS,),
+                        out_buf,
+                        scanned_predicates_buf,
+                        predicates_buf,
+                        compacted_p_buf,
+                        np.int32(total_cells),
+                        np.int32(nquads)
+                    )
+                    
+                    p_vec = np.empty(n_cells, dtype=np.float32)
+                    cl.enqueue_copy(self._queue, p_vec, compacted_p_buf)
+                    self._queue.finish()
+                    compacted_p_buf.release()
+
+                # Clean up per-habitat buffers
+                h_buf.release()
+                out_buf.release()
+                predicates_buf.release()
+                scanned_predicates_buf.release()
+                code_buf.release()
+                if code_scanned_buf is not None:
+                    code_scanned_buf.release()
+
+                results.append(
+                    CompactedHabitat(
+                        habitat_code=habitat.code,
+                        n_cells=n_cells,
+                        p_vec=p_vec,
+                    )
+                )
+
+                if self._profiling:
+                    total_evt_time = sum(
+                        (evt.profile.end - evt.profile.start) * 1e-6
+                        for evt in [evt_map, evt_gen, evt_scan, evt_corr, evt_comp]
+                        if evt is not None
+                    )
+                    total_bytes = self.get_bytes_read(invasion_map, habitat) + (n_cells * 4)
+                    self._kernel_launches.append((total_evt_time, total_bytes))
+        finally:
+            p_buf.release()
+
+        return results

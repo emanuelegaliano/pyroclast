@@ -68,6 +68,7 @@ class PyOpenCLMapCentricAdapter(PyOpenCLMonteCarloAdapter):
             kernel_path = (
                 Path(__file__).parent.parent
                 / "kernels"
+                / "monte_carlo"
                 / "monte_carlo_map_centric.cl"
             )
         super().__init__(kernel_path=kernel_path, profiling=profiling)

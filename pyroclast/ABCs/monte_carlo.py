@@ -133,6 +133,29 @@ class IMonteCarloAdapter(ABC):
             Estimated probability in :math:`[0.0, 1.0]`.
         """
 
+    def run_multi_habitats(
+        self,
+        habitats: list[CompactedHabitat],
+        config: MonteCarloConfig,
+    ) -> list[float]:
+        """Estimate destruction probability for multiple habitats simultaneously.
+
+        Parameters
+        ----------
+        habitats : list[CompactedHabitat]
+            List of N compacted habitats to simulate.
+        config : MonteCarloConfig
+            Simulation parameters.
+
+        Returns
+        -------
+        list[float]
+            List of N floats representing the estimated destruction probability for each habitat.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support run_multi_habitats()."
+        )
+
     @abstractmethod
     def suggest_topology(self, n_runs: int) -> GridTopology:
         """Suggest an optimal execution grid for the given number of runs.

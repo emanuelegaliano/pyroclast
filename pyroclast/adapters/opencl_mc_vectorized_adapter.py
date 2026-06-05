@@ -42,6 +42,7 @@ class PyOpenCLMonteCarloVectorizedAdapter(PyOpenCLMonteCarloAdapter):
         kernel_path: Path | None = None,
         profiling: bool = False,
         vec_width: int = 4,
+        extra_build_options: str = "",
     ) -> None:
         if vec_width not in _VALID_WIDTHS:
             raise ValueError(
@@ -52,12 +53,14 @@ class PyOpenCLMonteCarloVectorizedAdapter(PyOpenCLMonteCarloAdapter):
             kernel_path = (
                 Path(__file__).parent.parent
                 / "kernels"
+                / "monte_carlo"
                 / "monte_carlo_vectorized.cl"
             )
+        opts = f"-DVEC_WIDTH={vec_width} {extra_build_options}".strip()
         super().__init__(
             kernel_path=kernel_path,
             profiling=profiling,
-            extra_build_options=f"-DVEC_WIDTH={vec_width}",
+            extra_build_options=opts,
         )
 
     def _padded_p_host(self, habitat: CompactedHabitat) -> np.ndarray:
