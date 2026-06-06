@@ -83,7 +83,7 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
             dem[dem == src.nodata] = np.nan
 
     # 2. Generate synthetic habitats and a single invasion map
-    n_habitats_total = 5  # We scale up to 5 synthetic habitats for the benchmark
+    n_habitats_total = 10
     print(f"Generating {n_habitats_total} synthetic habitats based on DEM...")
     
     # Generate the invasion map first
