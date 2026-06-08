@@ -13,6 +13,7 @@ from .adapters import (
     PyOpenCLMonteCarlo2DTransposedAdapter,
     PyOpenCLMonteCarloAdapter,
     PyOpenCLMonteCarloCommutativeAdapter,
+    PyOpenCLMonteCarloGlobalSeedAdapter,
     PyOpenCLMonteCarloPingPongAdapter,
     PyOpenCLMonteCarloVectorizedAdapter,
     PyOpenCLMonteCarloVectorizedPingPongAdapter,
@@ -39,6 +40,7 @@ __all__ = [
     "PyOpenCLGPUVectorizedCompactionAdapter",
     "PyOpenCLMonteCarloAdapter",
     "PyOpenCLMonteCarloCommutativeAdapter",
+    "PyOpenCLMonteCarloGlobalSeedAdapter",
     "PyOpenCLMonteCarloPingPongAdapter",
     "PyOpenCLMonteCarloVectorizedAdapter",
     "PyOpenCLMonteCarloVectorizedPingPongAdapter",
@@ -53,3 +55,4 @@ __all__ = [
     "run_preprocessing_batch",
     "generate_synthetic_habitat_dem",
 ]
+

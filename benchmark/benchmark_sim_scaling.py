@@ -21,6 +21,7 @@ from pyroclast import (
     PyOpenCLAdapter,
     PyOpenCLMonteCarloAdapter,
     PyOpenCLMonteCarloCommutativeAdapter,
+    PyOpenCLMonteCarloGlobalSeedAdapter,
     PyOpenCLMonteCarloPingPongAdapter,
     PyOpenCLMonteCarloVectorizedAdapter,
     PyOpenCLMonteCarloVectorizedPingPongAdapter,
@@ -96,19 +97,22 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
         "Standard": PyOpenCLMonteCarloAdapter(profiling=True),
         "Ping-Pong": PyOpenCLMonteCarloPingPongAdapter(profiling=True),
         "Commutative": PyOpenCLMonteCarloCommutativeAdapter(profiling=True),
+        "Global-Seed": PyOpenCLMonteCarloGlobalSeedAdapter(profiling=True),
         "Vec-w2": PyOpenCLMonteCarloVectorizedAdapter(profiling=True, vec_width=2),
         "VecPP-w2": PyOpenCLMonteCarloVectorizedPingPongAdapter(profiling=True, vec_width=2),
         "Multi-Hab Comm": PyOpenCLMonteCarloCommutativeAdapter(profiling=True),
+        "Multi-Hab GS": PyOpenCLMonteCarloGlobalSeedAdapter(profiling=True),
     }
 
     # 3. Warm-up runs to ensure GPU compilation & cache are hot
     print("Performing warm-up runs...")
     warmup_config = MonteCarloConfig(n_runs=10000, threshold=0.005, seed=42)
     for name, adapter in adapters.items():
-        if name == "Multi-Hab Comm":
+        if name in ("Multi-Hab Comm", "Multi-Hab GS"):
             adapter.run_multi_habitats([target_habitat], warmup_config)
         else:
             adapter.run(target_habitat, warmup_config)
+
 
     # 4. Sweep Parameters
     mc_runs_sweep = list(range(500000, 1000000 + 1, 50000))
@@ -138,7 +142,7 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
             trial_times = []
             for _ in range(3):
                 adapter.reset_profile()
-                if name == "Multi-Hab Comm":
+                if name in ("Multi-Hab Comm", "Multi-Hab GS"):
                     adapter.run_multi_habitats([target_habitat], config)
                 else:
                     adapter.run(target_habitat, config)
@@ -177,10 +181,13 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
             "Standard": {"color": "tab:red", "marker": "v"},
             "Ping-Pong": {"color": "darkorange", "marker": "s"},
             "Commutative": {"color": "tab:blue", "marker": "D"},
+            "Global-Seed": {"color": "tab:purple", "marker": "^"},
             "Vec-w2": {"color": "tab:brown", "marker": "X"},
             "VecPP-w2": {"color": "tab:pink", "marker": "*"},
             "Multi-Hab Comm": {"color": "tab:green", "marker": "o"},
+            "Multi-Hab GS": {"color": "teal", "marker": "p"},
         }
+
 
         # Plot Subplot 1: Execution Time Scaling
         for name in adapters.keys():

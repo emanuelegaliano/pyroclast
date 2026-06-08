@@ -21,6 +21,7 @@ from pyroclast import (
     PyOpenCLAdapter,
     PyOpenCLMonteCarloAdapter,
     PyOpenCLMonteCarloCommutativeAdapter,
+    PyOpenCLMonteCarloGlobalSeedAdapter,
     PyOpenCLMonteCarloPingPongAdapter,
     PyOpenCLMonteCarloVectorizedAdapter,
     PyOpenCLMonteCarloVectorizedPingPongAdapter,
@@ -99,8 +100,10 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
         "Standard": (PyOpenCLMonteCarloAdapter, {}),
         "Ping-Pong": (PyOpenCLMonteCarloPingPongAdapter, {}),
         "Commutative": (PyOpenCLMonteCarloCommutativeAdapter, {}),
+        "Global-Seed": (PyOpenCLMonteCarloGlobalSeedAdapter, {}),
         "Vec-w2": (PyOpenCLMonteCarloVectorizedAdapter, {"vec_width": 2}),
         "Multi-Hab Comm": (PyOpenCLMonteCarloCommutativeAdapter, {}),
+        "Multi-Hab GS": (PyOpenCLMonteCarloGlobalSeedAdapter, {}),
     }
 
     raw_results = []
@@ -112,7 +115,7 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
         adapter_rng = cls(profiling=True, **kwargs)
         
         # B. Setup Without RNG (Compute Only)
-        adapter_norng = cls(profiling=True, options=["-DNO_RNG=1"], **kwargs)
+        adapter_norng = cls(profiling=True, extra_build_options="-DNO_RNG=1", **kwargs)
 
         configurations = {
             "With RNG": adapter_rng,
@@ -121,7 +124,7 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
 
         for label, adapter in configurations.items():
             # Warmup
-            if name == "Multi-Hab Comm":
+            if name in ("Multi-Hab Comm", "Multi-Hab GS"):
                 adapter.run_multi_habitats([target_habitat], config)
             else:
                 adapter.run(target_habitat, config)
@@ -129,7 +132,7 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
             trial_times = []
             for _ in range(3):
                 adapter.reset_profile()
-                if name == "Multi-Hab Comm":
+                if name in ("Multi-Hab Comm", "Multi-Hab GS"):
                     adapter.run_multi_habitats([target_habitat], config)
                 else:
                     adapter.run(target_habitat, config)
