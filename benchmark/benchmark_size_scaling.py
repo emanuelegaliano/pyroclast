@@ -14,7 +14,6 @@ from dotenv import load_dotenv
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import rasterio
 
 from pyroclast import (
     PyOpenCLAdapter,
@@ -24,7 +23,9 @@ from pyroclast import (
     PyOpenCLMonteCarloPingPongAdapter,
     PyOpenCLMonteCarloVectorizedAdapter,
     PyOpenCLMonteCarloVectorizedPingPongAdapter,
+    PyOpenCLMonteCarloContiguousAdapter,
     generate_synthetic_habitat_dem,
+    generate_synthetic_dem,
 )
 from pyroclast.domain.models import GridTopology, MonteCarloConfig
 
@@ -57,22 +58,8 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
 
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    data_path = os.getenv("DATA_PATH", "data").strip('"\'')
-    dem_path = os.getenv("DEM_PATH")
-    if not dem_path:
-        dem_path = str(Path(data_path) / "dem.tif")
-
-    if not Path(dem_path).is_file():
-        raise FileNotFoundError(
-            f"DEM file not found at: {dem_path}. Please check DEM_PATH in .env or data folder."
-        )
-
-    # 1. Load DEM
-    print(f"Loading DEM from {dem_path}...")
-    with rasterio.open(dem_path) as src:
-        dem = src.read(1).astype(np.float32)
-        if src.nodata is not None:
-            dem[dem == src.nodata] = np.nan
+    print("Generating fully synthetic DEM...")
+    dem = generate_synthetic_dem(shape=(2000, 2000))
 
     # 2. Instantiate all adapters with profiling=True
     adapters = {
@@ -82,8 +69,10 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
         "Global-Seed": PyOpenCLMonteCarloGlobalSeedAdapter(profiling=True),
         "Vec-w2": PyOpenCLMonteCarloVectorizedAdapter(profiling=True, vec_width=2),
         "VecPP-w2": PyOpenCLMonteCarloVectorizedPingPongAdapter(profiling=True, vec_width=2),
+        "Contiguous": PyOpenCLMonteCarloContiguousAdapter(profiling=True),
         "Multi-Hab Comm": PyOpenCLMonteCarloCommutativeAdapter(profiling=True),
         "Multi-Hab GS": PyOpenCLMonteCarloGlobalSeedAdapter(profiling=True),
+        "Multi-Hab Cont": PyOpenCLMonteCarloContiguousAdapter(profiling=True),
     }
 
     # 3. Sweep scaling factors (e.g. 10.0 to 1.0, reducing size step by step)
@@ -99,13 +88,14 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
 
     # Warm-up runs with the smallest habitat to compile kernels
     print("Performing warm-up runs...")
-    warmup_map, warmup_inv = generate_synthetic_habitat_dem(dem, occupancy_fraction=0.3, mean_p=0.5, seed=42, downscale_factor=10.0)
+    warmup_dem = dem[::10, ::10]
+    warmup_map, warmup_inv = generate_synthetic_habitat_dem(warmup_dem, occupancy_fraction=0.3, mean_p=0.5, seed=42)
     preprocess_adapter = PyOpenCLAdapter()
     warmup_compacted = preprocess_adapter.batch_preprocess(warmup_inv, [warmup_map])[0]
     
     warmup_config = MonteCarloConfig(n_runs=10000, threshold=threshold, seed=seed)
     for name, adapter in adapters.items():
-        if name in ("Multi-Hab Comm", "Multi-Hab GS"):
+        if name in ("Multi-Hab Comm", "Multi-Hab GS", "Multi-Hab Cont"):
             adapter.run_multi_habitats([warmup_compacted], warmup_config)
         else:
             adapter.run(warmup_compacted, warmup_config)
@@ -113,13 +103,14 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
     # Main Sweep Loop
     for factor in scaling_factors:
         # Generate synthetic habitat downscaled by `factor`
+        step = int(factor)
+        downscaled_dem = dem[::step, ::step] if step > 1 else dem
         hab_map, inv_map = generate_synthetic_habitat_dem(
-            dem=dem,
+            dem=downscaled_dem,
             occupancy_fraction=0.3,
             mean_p=0.5,
             seed=42,
-            habitat_code=f"SZ_{factor}",
-            downscale_factor=factor
+            habitat_code=f"SZ_{factor}"
         )
 
         compacted = preprocess_adapter.batch_preprocess(inv_map, [hab_map])[0]
@@ -144,7 +135,7 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
             trial_times = []
             for _ in range(3):
                 adapter.reset_profile()
-                if name in ("Multi-Hab Comm", "Multi-Hab GS"):
+                if name in ("Multi-Hab Comm", "Multi-Hab GS", "Multi-Hab Cont"):
                     adapter.run_multi_habitats([compacted], config)
                 else:
                     adapter.run(compacted, config)
@@ -189,6 +180,8 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
             "VecPP-w2": {"color": "tab:pink", "marker": "*"},
             "Multi-Hab Comm": {"color": "tab:green", "marker": "o"},
             "Multi-Hab GS": {"color": "teal", "marker": "p"},
+            "Contiguous": {"color": "olive", "marker": "h"},
+            "Multi-Hab Cont": {"color": "navy", "marker": "H"},
         }
 
         # Plot Subplot 1: Execution Time Scaling

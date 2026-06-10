@@ -15,7 +15,6 @@ from dotenv import load_dotenv
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import rasterio
 
 from pyroclast import (
     PyOpenCLAdapter,
@@ -25,29 +24,17 @@ from pyroclast import (
     PyOpenCLMonteCarloPingPongAdapter,
     PyOpenCLMonteCarloVectorizedAdapter,
     PyOpenCLMonteCarloVectorizedPingPongAdapter,
+    PyOpenCLMonteCarloContiguousAdapter,
     generate_synthetic_habitat_dem,
+    generate_synthetic_dem,
 )
 from pyroclast.domain.models import GridTopology, MonteCarloConfig
 
 
 def main(results_dir: Path | str | None = None, save_figures: bool = True) -> None:
     load_dotenv()
-    data_path = os.getenv("DATA_PATH", "data").strip('"\'')
-    dem_path = os.getenv("DEM_PATH")
-    if not dem_path:
-        dem_path = str(Path(data_path) / "dem.tif")
-
-    if not Path(dem_path).is_file():
-        raise FileNotFoundError(
-            f"DEM file not found at: {dem_path}. Please check DEM_PATH in .env or data folder."
-        )
-
-    # 1. Load DEM
-    print(f"Loading DEM from {dem_path}...")
-    with rasterio.open(dem_path) as src:
-        dem = src.read(1).astype(np.float32)
-        if src.nodata is not None:
-            dem[dem == src.nodata] = np.nan
+    print("Generating fully synthetic DEM...")
+    dem = generate_synthetic_dem(shape=(2000, 2000))
 
     # 2. Generate a synthetic habitat based on DEM
     print("Generating synthetic habitat based on DEM...")
@@ -124,7 +111,7 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
 
         for label, adapter in configurations.items():
             # Warmup
-            if name in ("Multi-Hab Comm", "Multi-Hab GS"):
+            if name in ("Multi-Hab Comm", "Multi-Hab GS", "Multi-Hab Cont"):
                 adapter.run_multi_habitats([target_habitat], config)
             else:
                 adapter.run(target_habitat, config)
@@ -132,7 +119,7 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
             trial_times = []
             for _ in range(3):
                 adapter.reset_profile()
-                if name in ("Multi-Hab Comm", "Multi-Hab GS"):
+                if name in ("Multi-Hab Comm", "Multi-Hab GS", "Multi-Hab Cont"):
                     adapter.run_multi_habitats([target_habitat], config)
                 else:
                     adapter.run(target_habitat, config)

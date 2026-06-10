@@ -41,6 +41,35 @@ class MemoryRasterMap(RasterMap):
         return False
 
 
+def generate_synthetic_dem(shape: tuple[int, int] = (2000, 2000), max_elevation: float = 3000.0) -> np.ndarray:
+    """Generate a completely synthetic conical DEM.
+    
+    Creates a cone centered in the grid, simulating a volcano.
+    
+    Parameters
+    ----------
+    shape : tuple[int, int], optional
+        The dimensions of the DEM (rows, columns). Default is (2000, 2000).
+    max_elevation : float, optional
+        The peak elevation at the center. Default is 3000.0.
+        
+    Returns
+    -------
+    np.ndarray
+        2-D array of float32 representing the synthetic DEM.
+    """
+    y, x = np.ogrid[-shape[0]//2 : shape[0] - shape[0]//2, -shape[1]//2 : shape[1] - shape[1]//2]
+    r = np.sqrt(x**2 + y**2)
+    max_r = np.sqrt((shape[0]//2)**2 + (shape[1]//2)**2)
+    dem = max_elevation * (1.0 - r / max_r)
+    # Add a bit of noise to make it less uniform
+    rng = np.random.default_rng(42)
+    noise = rng.uniform(-10.0, 10.0, size=shape)
+    dem += noise
+    return np.clip(dem, 0.0, None).astype(np.float32)
+
+
+
 def generate_synthetic_habitat_dem(
     dem: np.ndarray,
     occupancy_fraction: float,

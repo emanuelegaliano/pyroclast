@@ -20,16 +20,17 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+
 from pyroclast import (
-    FileMapRepository,
+    generate_synthetic_habitat_dem,
+    generate_synthetic_dem,
     PyOpenCLAdapter,
     PyOpenCLHostScalarCompactionAdapter,
     PyOpenCLHostNonzeroCompactionAdapter,
     PyOpenCLHostCompressCompactionAdapter,
     PyOpenCLGPUScalarCompactionAdapter,
     PyOpenCLGPUVectorizedCompactionAdapter,
-    InvasionCriteria,
-    HabitatCriteria,
+    PyOpenCLGPUVectorizedCompactionAdapter,
 )
 
 
@@ -52,15 +53,29 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
 
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    data_path = os.getenv("DATA_PATH", "data").strip('"\'')
-    invasion_map = os.getenv("INVASION_MAP", "").strip('"\'') or None
+    print("Generating fully synthetic DEM...")
+    dem = generate_synthetic_dem(shape=(2000, 2000))
 
-    print(f"Loading repository maps from {data_path}...")
-    repo = FileMapRepository(data_path, invasion_map=invasion_map)
+    print("Generating 10 synthetic habitats based on DEM...")
+    _, invasion = generate_synthetic_habitat_dem(
+        dem=dem,
+        occupancy_fraction=0.0,
+        mean_p=0.5,
+        seed=42,
+    )
 
-    invasion = repo.get(InvasionCriteria())
-    habitats = list(repo.matching(HabitatCriteria()))
-    print(f"Loaded {len(habitats)} habitats for compaction benchmarking.")
+    habitats = []
+    for i in range(10):
+        hab_map, _ = generate_synthetic_habitat_dem(
+            dem=dem,
+            occupancy_fraction=0.2,
+            mean_p=0.0,
+            seed=42 + i + 1,
+            habitat_code=f"SYNTH_DEM_{i}",
+        )
+        habitats.append(hab_map)
+
+    print(f"Generated {len(habitats)} synthetic habitats for compaction benchmarking.")
 
     compaction_variants = {
         "Host NumPy Mask (Baseline)": PyOpenCLAdapter,

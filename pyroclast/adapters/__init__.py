@@ -24,6 +24,7 @@ from .opencl_mc_vectorized_adapter import PyOpenCLMonteCarloVectorizedAdapter
 from .opencl_mc_vectorized_pingpong_adapter import (
     PyOpenCLMonteCarloVectorizedPingPongAdapter,
 )
+from .opencl_mc_contiguous_adapter import PyOpenCLMonteCarloContiguousAdapter
 
 __all__ = [
     "PyOpenCLAdapter",
@@ -41,5 +42,6 @@ __all__ = [
     "PyOpenCLMapCentricAdapter",
     "PyOpenCLMonteCarlo2DAdapter",
     "PyOpenCLMonteCarlo2DTransposedAdapter",
+    "PyOpenCLMonteCarloContiguousAdapter",
 ]
 

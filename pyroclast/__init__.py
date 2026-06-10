@@ -17,8 +17,9 @@ from .adapters import (
     PyOpenCLMonteCarloPingPongAdapter,
     PyOpenCLMonteCarloVectorizedAdapter,
     PyOpenCLMonteCarloVectorizedPingPongAdapter,
+    PyOpenCLMonteCarloContiguousAdapter,
 )
-from .services import run_preprocessing_batch, generate_synthetic_habitat_dem
+from .services import run_preprocessing_batch, generate_synthetic_habitat_dem, generate_synthetic_dem
 
 __all__ = [
     # Repository layer
@@ -47,6 +48,7 @@ __all__ = [
     "PyOpenCLMapCentricAdapter",
     "PyOpenCLMonteCarlo2DAdapter",
     "PyOpenCLMonteCarlo2DTransposedAdapter",
+    "PyOpenCLMonteCarloContiguousAdapter",
     # Domain
     "CompactedHabitat",
     "GridTopology",
@@ -54,5 +56,6 @@ __all__ = [
     # Services
     "run_preprocessing_batch",
     "generate_synthetic_habitat_dem",
+    "generate_synthetic_dem",
 ]
 

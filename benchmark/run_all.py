@@ -6,8 +6,10 @@ and outputs the final execution summary.
 
 from __future__ import annotations
 
+import argparse
 import time
 import re
+from enum import IntEnum
 from pathlib import Path
 
 from benchmark import (
@@ -17,12 +19,40 @@ from benchmark import (
     benchmark_rng_vs_norng,
     benchmark_lws_gws,
     benchmark_compaction,
+    benchmark_2d_topology,
+    benchmark_map_centric,
 )
 
 SAVE_FIGURES = False
 
 
+class SweepTask(IntEnum):
+    """Enumeration of all benchmark sweeps available in the suite."""
+    SIMULATION_SCALING = 1
+    HABITAT_SCALING = 2
+    SIZE_SCALING = 3
+    LWS_GWS_TUNING = 4
+    RNG_VS_NORNG = 5
+    STREAM_COMPACTION = 6
+    TOPOLOGY_2D = 7
+    MAP_CENTRIC = 8
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Pyroclast Benchmark Suite Runner")
+    parser.add_argument(
+        "--start",
+        type=int,
+        default=1,
+        help="Sweep number to start from (1-8). Default is 1."
+    )
+    args = parser.parse_args()
+    start_idx = args.start
+
+    if start_idx < 1 or start_idx > 8:
+        print(f"Error: --start must be between 1 and 8, got {start_idx}")
+        return
+
     print("=" * 60)
     print("        PYROCLAST BENCHMARK SUITE RUNNER")
     print("=" * 60)
@@ -45,41 +75,60 @@ def main() -> None:
     print(f"Detected GPU: {gpu_name}")
     print(f"Results will be saved in: {results_dir}/")
     print(f"Save Figures: {SAVE_FIGURES}")
+    print(f"Starting execution from Sweep {start_idx}...\n")
 
-    # 1. Run Simulation Scaling Sweep
-    print("\n--- Running Sweep 1: Simulation Scaling (500k to 1M runs) ---")
-    benchmark_sim_scaling.main(results_dir=results_dir, save_figures=SAVE_FIGURES)
+    if start_idx <= SweepTask.SIMULATION_SCALING:
+        print("\n--- Running Sweep 1: Simulation Scaling (500k to 1M runs) ---")
+        benchmark_sim_scaling.main(results_dir=results_dir, save_figures=SAVE_FIGURES)
 
-    # 2. Run Habitat Scaling Sweep
-    print("\n--- Running Sweep 2: Habitat Scaling (1 to N habitats) ---")
-    benchmark_habitat_scaling.main(results_dir=results_dir, save_figures=SAVE_FIGURES)
+    if start_idx <= SweepTask.HABITAT_SCALING:
+        print("\n--- Running Sweep 2: Habitat Scaling (1 to N habitats) ---")
+        benchmark_habitat_scaling.main(results_dir=results_dir, save_figures=SAVE_FIGURES)
 
-    # 3. Run Size Scaling Sweep
-    print("\n--- Running Sweep 3: Size Scaling (Factors 10 to 1) ---")
-    benchmark_size_scaling.main(results_dir=results_dir, save_figures=SAVE_FIGURES)
+    if start_idx <= SweepTask.SIZE_SCALING:
+        print("\n--- Running Sweep 3: Size Scaling (Factors 10 to 1) ---")
+        benchmark_size_scaling.main(results_dir=results_dir, save_figures=SAVE_FIGURES)
 
-    # 4. Run LWS/GWS Sweep
-    print("\n--- Running Sweep 4: LWS & GWS Parameter Tuning ---")
-    benchmark_lws_gws.main(results_dir=results_dir, save_figures=SAVE_FIGURES)
+    if start_idx <= SweepTask.LWS_GWS_TUNING:
+        print("\n--- Running Sweep 4: LWS & GWS Parameter Tuning ---")
+        benchmark_lws_gws.main(results_dir=results_dir, save_figures=SAVE_FIGURES)
 
-    # 5. Run RNG vs No-RNG Sweep
-    print("\n--- Running Sweep 5: RNG Overhead Analysis ---")
-    benchmark_rng_vs_norng.main(results_dir=results_dir, save_figures=SAVE_FIGURES)
+    if start_idx <= SweepTask.RNG_VS_NORNG:
+        print("\n--- Running Sweep 5: RNG Overhead Analysis ---")
+        benchmark_rng_vs_norng.main(results_dir=results_dir, save_figures=SAVE_FIGURES)
 
-    # 6. Run Stream Compaction Preprocessing Sweep
-    print("\n--- Running Sweep 6: Stream Compaction Variants ---")
-    benchmark_compaction.main(results_dir=results_dir, save_figures=SAVE_FIGURES)
+    if start_idx <= SweepTask.STREAM_COMPACTION:
+        print("\n--- Running Sweep 6: Stream Compaction Variants ---")
+        benchmark_compaction.main(results_dir=results_dir, save_figures=SAVE_FIGURES)
+
+    if start_idx <= SweepTask.TOPOLOGY_2D:
+        print("\n--- Running Sweep 7: 2D Topology Analysis ---")
+        benchmark_2d_topology.main(results_dir=results_dir, save_figures=SAVE_FIGURES)
+
+    if start_idx <= SweepTask.MAP_CENTRIC:
+        print("\n--- Running Sweep 8: Map-Centric vs Run-Centric Scaling ---")
+        benchmark_map_centric.main(results_dir=results_dir, save_figures=SAVE_FIGURES)
 
     elapsed = time.perf_counter() - t0
     print("\n" + "=" * 60)
-    print(f"All benchmarks completed successfully in {elapsed:.1f} seconds.")
+    print(f"All requested benchmarks completed successfully in {elapsed:.1f} seconds.")
     print(f"Output files generated in `{results_dir}/`:")
-    print(f"  - {results_dir}/simulation_scaling.csv" + (" / .png" if SAVE_FIGURES else ""))
-    print(f"  - {results_dir}/habitat_scaling.csv" + (" / .png" if SAVE_FIGURES else ""))
-    print(f"  - {results_dir}/size_scaling.csv" + (" / .png" if SAVE_FIGURES else ""))
-    print(f"  - {results_dir}/lws_gws_sweep.csv" + (" / lws_gws_heatmap.png" if SAVE_FIGURES else ""))
-    print(f"  - {results_dir}/rng_vs_norng.csv" + (" / .png" if SAVE_FIGURES else ""))
-    print(f"  - {results_dir}/compaction_benchmark.csv" + (" / .png" if SAVE_FIGURES else ""))
+    if start_idx <= SweepTask.SIMULATION_SCALING:
+        print(f"  - {results_dir}/simulation_scaling.csv" + (" / .png" if SAVE_FIGURES else ""))
+    if start_idx <= SweepTask.HABITAT_SCALING:
+        print(f"  - {results_dir}/habitat_scaling.csv" + (" / .png" if SAVE_FIGURES else ""))
+    if start_idx <= SweepTask.SIZE_SCALING:
+        print(f"  - {results_dir}/size_scaling.csv" + (" / .png" if SAVE_FIGURES else ""))
+    if start_idx <= SweepTask.LWS_GWS_TUNING:
+        print(f"  - {results_dir}/lws_gws_sweep.csv" + (" / lws_gws_heatmap.png" if SAVE_FIGURES else ""))
+    if start_idx <= SweepTask.RNG_VS_NORNG:
+        print(f"  - {results_dir}/rng_vs_norng.csv" + (" / .png" if SAVE_FIGURES else ""))
+    if start_idx <= SweepTask.STREAM_COMPACTION:
+        print(f"  - {results_dir}/compaction_benchmark.csv" + (" / .png" if SAVE_FIGURES else ""))
+    if start_idx <= SweepTask.TOPOLOGY_2D:
+        print(f"  - {results_dir}/benchmark_2d_topology.csv" + (" / .png" if SAVE_FIGURES else ""))
+    if start_idx <= SweepTask.MAP_CENTRIC:
+        print(f"  - {results_dir}/benchmark_map_centric.csv" + (" / .png" if SAVE_FIGURES else ""))
     print("=" * 60)
 
 

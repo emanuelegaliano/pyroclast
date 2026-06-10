@@ -16,34 +16,20 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import rasterio
 
 from pyroclast import (
     PyOpenCLAdapter,
     PyOpenCLMonteCarloCommutativeAdapter,
     generate_synthetic_habitat_dem,
+    generate_synthetic_dem,
 )
 from pyroclast.domain.models import GridTopology, MonteCarloConfig
 
 
 def main(results_dir: Path | str | None = None, save_figures: bool = True) -> None:
     load_dotenv()
-    data_path = os.getenv("DATA_PATH", "data").strip('"\'')
-    dem_path = os.getenv("DEM_PATH")
-    if not dem_path:
-        dem_path = str(Path(data_path) / "dem.tif")
-
-    if not Path(dem_path).is_file():
-        raise FileNotFoundError(
-            f"DEM file not found at: {dem_path}. Please check DEM_PATH in .env or data folder."
-        )
-
-    # 1. Load DEM
-    print(f"Loading DEM from {dem_path}...")
-    with rasterio.open(dem_path) as src:
-        dem = src.read(1).astype(np.float32)
-        if src.nodata is not None:
-            dem[dem == src.nodata] = np.nan
+    print("Generating fully synthetic DEM...")
+    dem = generate_synthetic_dem(shape=(2000, 2000))
 
     # 2. Generate synthetic habitat
     print("Generating synthetic habitat based on DEM...")

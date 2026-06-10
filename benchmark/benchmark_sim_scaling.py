@@ -15,7 +15,6 @@ from dotenv import load_dotenv
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import rasterio
 
 from pyroclast import (
     PyOpenCLAdapter,
@@ -25,7 +24,9 @@ from pyroclast import (
     PyOpenCLMonteCarloPingPongAdapter,
     PyOpenCLMonteCarloVectorizedAdapter,
     PyOpenCLMonteCarloVectorizedPingPongAdapter,
+    PyOpenCLMonteCarloContiguousAdapter,
     generate_synthetic_habitat_dem,
+    generate_synthetic_dem,
 )
 from pyroclast.domain.models import GridTopology, MonteCarloConfig
 
@@ -58,22 +59,8 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
 
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    data_path = os.getenv("DATA_PATH", "data").strip('"\'')
-    dem_path = os.getenv("DEM_PATH")
-    if not dem_path:
-        dem_path = str(Path(data_path) / "dem.tif")
-
-    if not Path(dem_path).is_file():
-        raise FileNotFoundError(
-            f"DEM file not found at: {dem_path}. Please check DEM_PATH in .env or data folder."
-        )
-
-    # 1. Load DEM and generate synthetic habitat and invasion map
-    print(f"Loading DEM from {dem_path}...")
-    with rasterio.open(dem_path) as src:
-        dem = src.read(1).astype(np.float32)
-        if src.nodata is not None:
-            dem[dem == src.nodata] = np.nan
+    print("Generating fully synthetic DEM...")
+    dem = generate_synthetic_dem(shape=(2000, 2000))
 
     print("Generating synthetic habitat based on DEM...")
     hab_map, inv_map = generate_synthetic_habitat_dem(
@@ -100,15 +87,17 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
         "Global-Seed": PyOpenCLMonteCarloGlobalSeedAdapter(profiling=True),
         "Vec-w2": PyOpenCLMonteCarloVectorizedAdapter(profiling=True, vec_width=2),
         "VecPP-w2": PyOpenCLMonteCarloVectorizedPingPongAdapter(profiling=True, vec_width=2),
+        "Contiguous": PyOpenCLMonteCarloContiguousAdapter(profiling=True),
         "Multi-Hab Comm": PyOpenCLMonteCarloCommutativeAdapter(profiling=True),
         "Multi-Hab GS": PyOpenCLMonteCarloGlobalSeedAdapter(profiling=True),
+        "Multi-Hab Cont": PyOpenCLMonteCarloContiguousAdapter(profiling=True),
     }
 
     # 3. Warm-up runs to ensure GPU compilation & cache are hot
     print("Performing warm-up runs...")
     warmup_config = MonteCarloConfig(n_runs=10000, threshold=0.005, seed=42)
     for name, adapter in adapters.items():
-        if name in ("Multi-Hab Comm", "Multi-Hab GS"):
+        if name in ("Multi-Hab Comm", "Multi-Hab GS", "Multi-Hab Cont"):
             adapter.run_multi_habitats([target_habitat], warmup_config)
         else:
             adapter.run(target_habitat, warmup_config)
@@ -142,7 +131,7 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
             trial_times = []
             for _ in range(3):
                 adapter.reset_profile()
-                if name in ("Multi-Hab Comm", "Multi-Hab GS"):
+                if name in ("Multi-Hab Comm", "Multi-Hab GS", "Multi-Hab Cont"):
                     adapter.run_multi_habitats([target_habitat], config)
                 else:
                     adapter.run(target_habitat, config)
@@ -186,6 +175,8 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
             "VecPP-w2": {"color": "tab:pink", "marker": "*"},
             "Multi-Hab Comm": {"color": "tab:green", "marker": "o"},
             "Multi-Hab GS": {"color": "teal", "marker": "p"},
+            "Contiguous": {"color": "olive", "marker": "h"},
+            "Multi-Hab Cont": {"color": "navy", "marker": "H"},
         }
 
 
@@ -232,4 +223,4 @@ def main(results_dir: Path | str | None = None, save_figures: bool = True) -> No
 
 
 if __name__ == "__main__":
-    main()main()
+    main()
