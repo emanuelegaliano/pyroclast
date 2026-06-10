@@ -12,16 +12,14 @@ import re
 from enum import IntEnum
 from pathlib import Path
 
-from benchmark import (
-    benchmark_sim_scaling,
-    benchmark_habitat_scaling,
-    benchmark_size_scaling,
-    benchmark_rng_vs_norng,
-    benchmark_lws_gws,
-    benchmark_compaction,
-    benchmark_2d_topology,
-    benchmark_map_centric,
-)
+import benchmark_sim_scaling
+import benchmark_habitat_scaling
+import benchmark_size_scaling
+import benchmark_rng_vs_norng
+import benchmark_lws_gws
+import benchmark_compaction
+import benchmark_2d_topology
+import benchmark_map_centric
 
 SAVE_FIGURES = False
 
