@@ -79,7 +79,7 @@ void local_memory_scan(
  * =========================================================================== */
 __kernel void scan_k(
     __global       int4 * restrict scanned_predicates,
-    __global       int  * restrict code,
+    __global       int  * restrict tails,
     __global const int4 * restrict predicates,
     __local        int  * restrict lmem,
     const int             nquads
@@ -138,7 +138,7 @@ __kernel void scan_k(
 
     // Save the total tail of the workgroup
     if (li == lws - 1) {
-        code[get_group_id(0)] = correzione;
+        tails[get_group_id(0)] = correzione;
     }
 }
 
@@ -146,12 +146,12 @@ __kernel void scan_k(
 /* ===========================================================================
  * Kernel 4 — scan_correction_k
  *
- * Applies the group-level prefix sums (from the 'code' array) to correct the
+ * Applies the group-level prefix sums (from the 'tails' array) to correct the
  * local scan results.
  * =========================================================================== */
 __kernel void scan_correction_k(
     __global       int4 * restrict scanned_predicates,
-    __global const int  * restrict code, /* array of already scanned tails */
+    __global const int  * restrict tails, /* array of already scanned tails */
     const int             nquads
 ) {
     // Workgroup 0 processes the first block, which has no predecessor
@@ -168,8 +168,8 @@ __kernel void scan_correction_k(
     int gi = quads_per_wg * get_group_id(0) + li;
     const int block_end = min(quads_per_wg * ((int)get_group_id(0) + 1), nquads);
 
-    // Get the correction from the code array (at the index of the previous group)
-    int correzione = code[get_group_id(0) - 1];
+    // Get the correction from the tails array (at the index of the previous group)
+    int correzione = tails[get_group_id(0) - 1];
 
     // Apply the correction to the entire array slice
     while (gi < block_end) {
@@ -222,7 +222,7 @@ __kernel void stream_compaction_k(
  * =========================================================================== */
 __kernel void scan_scalar_k(
     __global       int  * restrict scanned_predicates,
-    __global       int  * restrict code,
+    __global       int  * restrict tails,
     __global const int  * restrict predicates,
     __local        int  * restrict lmem,
     const int             ncells
@@ -264,7 +264,7 @@ __kernel void scan_scalar_k(
     }
 
     if (li == lws - 1) {
-        code[get_group_id(0)] = correzione;
+        tails[get_group_id(0)] = correzione;
     }
 }
 
@@ -276,7 +276,7 @@ __kernel void scan_scalar_k(
  * =========================================================================== */
 __kernel void scan_correction_scalar_k(
     __global       int  * restrict scanned_predicates,
-    __global const int  * restrict code,
+    __global const int  * restrict tails,
     const int             ncells
 ) {
     if (get_group_id(0) == 0) return;
@@ -291,7 +291,7 @@ __kernel void scan_correction_scalar_k(
     int gi = cells_per_wg * get_group_id(0) + li;
     const int block_end = min(cells_per_wg * ((int)get_group_id(0) + 1), ncells);
 
-    int correzione = code[get_group_id(0) - 1];
+    int correzione = tails[get_group_id(0) - 1];
 
     while (gi < block_end) {
         scanned_predicates[gi] += correzione;
@@ -319,5 +319,40 @@ __kernel void stream_compaction_scalar_k(
             compacted_p[dest] = out_map[gi];
         }
         gi += get_global_size(0);
+    }
+}
+
+/* ===========================================================================
+ * Kernel 9 — scan_tails_k
+ *
+ * Esegue una prefix scan inclusiva in-place sul piccolo array 'tails'
+ * (al massimo 64 elementi) usando un singolo workgroup (Hillis-Steele).
+ * Sostituisce il np.cumsum() sulla CPU, eliminando lo stall della GPU.
+ *
+ * Deve essere lanciato con:
+ *   GWS = LWS = 64  (un singolo workgroup)
+ * =========================================================================== */
+__kernel void scan_tails_k(
+    __global int * restrict tails,
+    __local  int * restrict lmem,
+    const int               nwg_count
+) {
+    const int li = get_local_id(0);
+
+    /* Carica in local memory (0 per gli slot oltre nwg_count) */
+    lmem[li] = (li < nwg_count) ? tails[li] : 0;
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    /* Hillis-Steele inclusive scan */
+    for (int stride = 1; stride < get_local_size(0); stride *= 2) {
+        int val = (li >= stride) ? lmem[li - stride] : 0;
+        barrier(CLK_LOCAL_MEM_FENCE);
+        lmem[li] += val;
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+
+    /* Scrivi il risultato: ora tails[i] = somma di tails[0..i] */
+    if (li < nwg_count) {
+        tails[li] = lmem[li];
     }
 }

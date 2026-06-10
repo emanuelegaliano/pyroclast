@@ -458,6 +458,7 @@ class PyOpenCLGPUScalarCompactionAdapter(PyOpenCLAdapter):
             k_scan = cl.Kernel(self._program, "scan_scalar_k")
             k_corr = cl.Kernel(self._program, "scan_correction_scalar_k")
             k_compact = cl.Kernel(self._program, "stream_compaction_scalar_k")
+            k_scan_tails = cl.Kernel(self._program, "scan_tails_k")
 
             for habitat in habitats:
                 if habitat.data.shape != invasion_map.data.shape:
@@ -477,7 +478,7 @@ class PyOpenCLGPUScalarCompactionAdapter(PyOpenCLAdapter):
 
                 LWS = 256
                 nwg = min(64, (total_cells + LWS - 1) // LWS)
-                code_buf = cl.Buffer(self._ctx, mf.READ_WRITE, size=nwg * 4)
+                tails_buf = cl.Buffer(self._ctx, mf.READ_WRITE, size=nwg * 4)
 
                 # 1. Run map_multiply
                 evt_map = k_map(self._queue, (total_cells,), None, p_buf, h_buf, out_buf, np.int32(total_cells))
@@ -492,34 +493,35 @@ class PyOpenCLGPUScalarCompactionAdapter(PyOpenCLAdapter):
                     (nwg * LWS,),
                     (LWS,),
                     scanned_predicates_buf,
-                    code_buf,
+                    tails_buf,
                     predicates_buf,
                     lmem,
                     np.int32(total_cells)
                 )
 
                 # 4. Correct group-level sums if nwg > 1
+                SCAN_LWS = 64
+                lmem_tails = cl.LocalMemory(SCAN_LWS * 4)
+                evt_scan_tails = k_scan_tails(
+                    self._queue, (SCAN_LWS,), (SCAN_LWS,),
+                    tails_buf, lmem_tails, np.int32(nwg)
+                )
+
                 evt_corr = None
-                code_scanned_buf = None
-                code_host = np.empty(nwg, dtype=np.int32)
-                cl.enqueue_copy(self._queue, code_host, code_buf)
-                self._queue.finish()
-
                 if nwg > 1:
-                    code_scanned = np.cumsum(code_host).astype(np.int32)
-                    n_cells = int(code_scanned[-1])
-
-                    code_scanned_buf = cl.Buffer(self._ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=code_scanned)
                     evt_corr = k_corr(
                         self._queue,
                         (nwg * LWS,),
                         (LWS,),
                         scanned_predicates_buf,
-                        code_scanned_buf,
+                        tails_buf,
                         np.int32(total_cells)
                     )
-                else:
-                    n_cells = int(code_host[0])
+
+                tails_last = np.empty(1, dtype=np.int32)
+                cl.enqueue_copy(self._queue, tails_last, tails_buf, src_offset=(nwg - 1) * 4)
+                self._queue.finish()
+                n_cells = int(tails_last[0])
 
                 if n_cells == 0:
                     p_vec = np.array([], dtype=np.float32)
@@ -550,9 +552,7 @@ class PyOpenCLGPUScalarCompactionAdapter(PyOpenCLAdapter):
                 out_buf.release()
                 predicates_buf.release()
                 scanned_predicates_buf.release()
-                code_buf.release()
-                if code_scanned_buf is not None:
-                    code_scanned_buf.release()
+                tails_buf.release()
 
                 results.append(
                     CompactedHabitat(
@@ -565,7 +565,7 @@ class PyOpenCLGPUScalarCompactionAdapter(PyOpenCLAdapter):
                 if self._profiling:
                     total_evt_time = sum(
                         (evt.profile.end - evt.profile.start) * 1e-6
-                        for evt in [evt_map, evt_gen, evt_scan, evt_corr, evt_comp]
+                        for evt in [evt_map, evt_gen, evt_scan, evt_scan_tails, evt_corr, evt_comp]
                         if evt is not None
                     )
                     total_bytes = self.get_bytes_read(invasion_map, habitat) + (n_cells * 4)
@@ -609,6 +609,7 @@ class PyOpenCLGPUVectorizedCompactionAdapter(PyOpenCLAdapter):
             k_scan = cl.Kernel(self._program, "scan_k")
             k_corr = cl.Kernel(self._program, "scan_correction_k")
             k_compact = cl.Kernel(self._program, "stream_compaction_k")
+            k_scan_tails = cl.Kernel(self._program, "scan_tails_k")
 
             for habitat in habitats:
                 if habitat.data.shape != invasion_map.data.shape:
@@ -630,7 +631,7 @@ class PyOpenCLGPUVectorizedCompactionAdapter(PyOpenCLAdapter):
 
                 LWS = 256
                 nwg = min(64, (nquads + LWS - 1) // LWS)
-                code_buf = cl.Buffer(self._ctx, mf.READ_WRITE, size=nwg * 4)
+                tails_buf = cl.Buffer(self._ctx, mf.READ_WRITE, size=nwg * 4)
 
                 # 1. Run map_multiply
                 evt_map = k_map(self._queue, (total_cells,), None, p_buf, h_buf, out_buf, np.int32(total_cells))
@@ -645,34 +646,35 @@ class PyOpenCLGPUVectorizedCompactionAdapter(PyOpenCLAdapter):
                     (nwg * LWS,),
                     (LWS,),
                     scanned_predicates_buf,
-                    code_buf,
+                    tails_buf,
                     predicates_buf,
                     lmem,
                     np.int32(nquads)
                 )
 
                 # 4. Correct group-level sums if nwg > 1
+                SCAN_LWS = 64
+                lmem_tails = cl.LocalMemory(SCAN_LWS * 4)
+                evt_scan_tails = k_scan_tails(
+                    self._queue, (SCAN_LWS,), (SCAN_LWS,),
+                    tails_buf, lmem_tails, np.int32(nwg)
+                )
+
                 evt_corr = None
-                code_scanned_buf = None
-                code_host = np.empty(nwg, dtype=np.int32)
-                cl.enqueue_copy(self._queue, code_host, code_buf)
-                self._queue.finish()
-
                 if nwg > 1:
-                    code_scanned = np.cumsum(code_host).astype(np.int32)
-                    n_cells = int(code_scanned[-1])
-
-                    code_scanned_buf = cl.Buffer(self._ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=code_scanned)
                     evt_corr = k_corr(
                         self._queue,
                         (nwg * LWS,),
                         (LWS,),
                         scanned_predicates_buf,
-                        code_scanned_buf,
+                        tails_buf,
                         np.int32(nquads)
                     )
-                else:
-                    n_cells = int(code_host[0])
+
+                tails_last = np.empty(1, dtype=np.int32)
+                cl.enqueue_copy(self._queue, tails_last, tails_buf, src_offset=(nwg - 1) * 4)
+                self._queue.finish()
+                n_cells = int(tails_last[0])
 
                 if n_cells == 0:
                     p_vec = np.array([], dtype=np.float32)
@@ -704,9 +706,7 @@ class PyOpenCLGPUVectorizedCompactionAdapter(PyOpenCLAdapter):
                 out_buf.release()
                 predicates_buf.release()
                 scanned_predicates_buf.release()
-                code_buf.release()
-                if code_scanned_buf is not None:
-                    code_scanned_buf.release()
+                tails_buf.release()
 
                 results.append(
                     CompactedHabitat(
@@ -719,7 +719,7 @@ class PyOpenCLGPUVectorizedCompactionAdapter(PyOpenCLAdapter):
                 if self._profiling:
                     total_evt_time = sum(
                         (evt.profile.end - evt.profile.start) * 1e-6
-                        for evt in [evt_map, evt_gen, evt_scan, evt_corr, evt_comp]
+                        for evt in [evt_map, evt_gen, evt_scan, evt_scan_tails, evt_corr, evt_comp]
                         if evt is not None
                     )
                     total_bytes = self.get_bytes_read(invasion_map, habitat) + (n_cells * 4)
