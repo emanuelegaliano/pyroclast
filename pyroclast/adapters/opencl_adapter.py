@@ -61,6 +61,21 @@ logger = logging.getLogger(__name__)
 _KERNEL_NAME = "map_multiply"
 
 
+def _query_lws(kernel: cl.Kernel, device: cl.Device, max_preferred: int = 256) -> int:
+    """Return a safe, power-of-2 LWS for *kernel* on *device*.
+
+    Queries ``CL_KERNEL_WORK_GROUP_SIZE`` and clamps the result to
+    *max_preferred* (default 256), then rounds down to the nearest power of 2.
+    This avoids ``CL_INVALID_WORK_GROUP_SIZE`` (-54) on integrated GPUs or
+    devices with small workgroup limits.
+    """
+    hw_max: int = kernel.get_work_group_info(
+        cl.kernel_work_group_info.WORK_GROUP_SIZE, device
+    )
+    clamped = min(hw_max, max_preferred)
+    return 1 << (clamped.bit_length() - 1)
+
+
 def _find_gpu_device() -> cl.Device | None:
     """Scan all OpenCL platforms and return the first GPU device found.
 
@@ -429,6 +444,38 @@ class PyOpenCLHostCompressCompactionAdapter(PyOpenCLAdapter):
 class PyOpenCLGPUScalarCompactionAdapter(PyOpenCLAdapter):
     """GPU-side stream compaction using scalar prefix scan and compaction kernels."""
     
+    def get_bytes_read(self, invasion_map: RasterMap, habitat: RasterMap) -> int:
+        """Bytes read from VRAM across all 6 preprocessing kernels."""
+        N = invasion_map.data.size
+        nwg = getattr(self, "_last_nwg", 0)
+        return (
+            N * 4          # p_map  — map_multiply
+            + N * 1        # h_map  — map_multiply
+            + N * 1        # h_map  — generate_predicates
+            + N * 4        # predicates — scan_scalar_k
+            + N * 4        # predicates — stream_compaction_scalar_k
+            + N * 4        # scanned_predicates — scan_correction_scalar_k
+            + N * 4        # scanned_predicates — stream_compaction_scalar_k
+            + N * 4        # out_map — stream_compaction_scalar_k
+            + nwg * 4      # tails — scan_tails_k
+            + nwg * 4      # tails — scan_correction_scalar_k
+        )
+
+    def get_bytes_written(self, invasion_map: RasterMap, habitat: RasterMap) -> int:
+        """Bytes written to VRAM across all 6 preprocessing kernels."""
+        N = invasion_map.data.size
+        nwg = getattr(self, "_last_nwg", 0)
+        n_cells = getattr(self, "_last_compacted_cells", 0)
+        return (
+            N * 4          # out_map — map_multiply
+            + N * 4        # predicates — generate_predicates
+            + N * 4        # scanned_predicates — scan_scalar_k
+            + nwg * 4      # tails — scan_scalar_k
+            + nwg * 4      # tails — scan_tails_k
+            + N * 4        # scanned_predicates — scan_correction_scalar_k
+            + n_cells * 4  # compacted_p — stream_compaction_scalar_k
+        )
+
     def batch_preprocess(
         self,
         invasion_map: RasterMap,
@@ -460,6 +507,9 @@ class PyOpenCLGPUScalarCompactionAdapter(PyOpenCLAdapter):
             k_compact = cl.Kernel(self._program, "stream_compaction_scalar_k")
             k_scan_tails = cl.Kernel(self._program, "scan_tails_k")
 
+            device = self._ctx.devices[0]
+            LWS = _query_lws(k_scan, device)
+
             for habitat in habitats:
                 if habitat.data.shape != invasion_map.data.shape:
                     raise ValueError(
@@ -476,7 +526,6 @@ class PyOpenCLGPUScalarCompactionAdapter(PyOpenCLAdapter):
                 predicates_buf = cl.Buffer(self._ctx, mf.READ_WRITE, size=total_cells * 4)
                 scanned_predicates_buf = cl.Buffer(self._ctx, mf.READ_WRITE, size=total_cells * 4)
 
-                LWS = 256
                 nwg = min(64, (total_cells + LWS - 1) // LWS)
                 tails_buf = cl.Buffer(self._ctx, mf.READ_WRITE, size=nwg * 4)
 
@@ -568,7 +617,12 @@ class PyOpenCLGPUScalarCompactionAdapter(PyOpenCLAdapter):
                         for evt in [evt_map, evt_gen, evt_scan, evt_scan_tails, evt_corr, evt_comp]
                         if evt is not None
                     )
-                    total_bytes = self.get_bytes_read(invasion_map, habitat) + (n_cells * 4)
+                    self._last_nwg = nwg
+                    self._last_compacted_cells = n_cells
+                    total_bytes = (
+                        self.get_bytes_read(invasion_map, habitat)
+                        + self.get_bytes_written(invasion_map, habitat)
+                    )
                     self._kernel_launches.append((total_evt_time, total_bytes))
         finally:
             p_buf.release()
@@ -579,6 +633,31 @@ class PyOpenCLGPUScalarCompactionAdapter(PyOpenCLAdapter):
 class PyOpenCLGPUVectorizedCompactionAdapter(PyOpenCLAdapter):
     """GPU-side stream compaction using vectorized (int4) prefix scan and compaction kernels."""
     
+    def get_bytes_read(self, invasion_map: RasterMap, habitat: RasterMap) -> int:
+        """Bytes read from VRAM across all 6 preprocessing kernels (vectorized int4)."""
+        N = invasion_map.data.size
+        nwg = getattr(self, "_last_nwg", 0)
+        return (
+            N * 4  + N * 1  + N * 1    # p_map + h_map×2
+            + N * 4 + N * 4            # predicates (scan_k + stream_compaction_k)
+            + N * 4 + N * 4            # scanned_predicates (scan_correction_k + stream_compaction_k)
+            + N * 4                    # out_map (stream_compaction_k)
+            + nwg * 4 + nwg * 4        # tails (scan_tails_k + scan_correction_k)
+        )
+
+    def get_bytes_written(self, invasion_map: RasterMap, habitat: RasterMap) -> int:
+        """Bytes written to VRAM across all 6 preprocessing kernels (vectorized int4)."""
+        N = invasion_map.data.size
+        nwg = getattr(self, "_last_nwg", 0)
+        n_cells = getattr(self, "_last_compacted_cells", 0)
+        return (
+            N * 4 + N * 4              # out_map + predicates
+            + N * 4 + nwg * 4          # scanned_predicates + tails (scan_k)
+            + nwg * 4                  # tails (scan_tails_k)
+            + N * 4                    # scanned_predicates (scan_correction_k)
+            + n_cells * 4              # compacted_p
+        )
+
     def batch_preprocess(
         self,
         invasion_map: RasterMap,
@@ -611,6 +690,9 @@ class PyOpenCLGPUVectorizedCompactionAdapter(PyOpenCLAdapter):
             k_compact = cl.Kernel(self._program, "stream_compaction_k")
             k_scan_tails = cl.Kernel(self._program, "scan_tails_k")
 
+            device = self._ctx.devices[0]
+            LWS = _query_lws(k_scan, device)
+
             for habitat in habitats:
                 if habitat.data.shape != invasion_map.data.shape:
                     raise ValueError(
@@ -629,7 +711,6 @@ class PyOpenCLGPUVectorizedCompactionAdapter(PyOpenCLAdapter):
                 predicates_buf = cl.Buffer(self._ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=predicates_host)
                 scanned_predicates_buf = cl.Buffer(self._ctx, mf.READ_WRITE, size=nquads * 16)
 
-                LWS = 256
                 nwg = min(64, (nquads + LWS - 1) // LWS)
                 tails_buf = cl.Buffer(self._ctx, mf.READ_WRITE, size=nwg * 4)
 
@@ -722,7 +803,12 @@ class PyOpenCLGPUVectorizedCompactionAdapter(PyOpenCLAdapter):
                         for evt in [evt_map, evt_gen, evt_scan, evt_scan_tails, evt_corr, evt_comp]
                         if evt is not None
                     )
-                    total_bytes = self.get_bytes_read(invasion_map, habitat) + (n_cells * 4)
+                    self._last_nwg = nwg
+                    self._last_compacted_cells = n_cells
+                    total_bytes = (
+                        self.get_bytes_read(invasion_map, habitat)
+                        + self.get_bytes_written(invasion_map, habitat)
+                    )
                     self._kernel_launches.append((total_evt_time, total_bytes))
         finally:
             p_buf.release()

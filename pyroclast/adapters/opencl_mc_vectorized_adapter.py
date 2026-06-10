@@ -79,6 +79,10 @@ class PyOpenCLMonteCarloVectorizedAdapter(PyOpenCLMonteCarloAdapter):
         w = self._vec_width
         return ((n_cells + w - 1) // w) * w
 
+    def get_bytes_read(self, habitat: CompactedHabitat, n_runs: int) -> int:
+        """Bytes read: n_runs × run_stride float32 loads (includes alignment padding)."""
+        return n_runs * self._run_stride(habitat.n_cells) * 4
+
     def run(
         self,
         habitat: CompactedHabitat,
