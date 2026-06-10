@@ -140,8 +140,8 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
         self._kernel_path = kernel_path
         self._mwc64x_include = (
             Path(__file__).parent.parent.parent / "mwc64x-v0" / "mwc64x" / "cl"
-        )
-        self._kernel_dir = kernel_path.parent
+        ).resolve().as_posix()
+        self._kernel_dir = kernel_path.parent.resolve().as_posix()
         self._compiled_wg_size = 256
         # Extra -D defines appended by subclasses (e.g. -DVEC_WIDTH=4). Stored
         # so dynamic _recompile() preserves them across an LWS change.
@@ -151,7 +151,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
         try:
             self._program: cl.Program = cl.Program(
                 self._ctx, kernel_source
-            ).build(options=f"-I {self._mwc64x_include} -I {self._kernel_dir} -DWG_SIZE={self._compiled_wg_size} {self._extra_build_options}")
+            ).build(options=f'-I "{self._mwc64x_include}" -I "{self._kernel_dir}" -DWG_SIZE={self._compiled_wg_size} {self._extra_build_options}')
         except cl.RuntimeError as exc:
             raise RuntimeError(
                 f"OpenCL kernel compilation failed.\n"
@@ -193,7 +193,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
         try:
             self._program = cl.Program(
                 self._ctx, kernel_source
-            ).build(options=f"-I {self._mwc64x_include} -I {self._kernel_dir} -DWG_SIZE={wg_size} {self._extra_build_options}")
+            ).build(options=f'-I "{self._mwc64x_include}" -I "{self._kernel_dir}" -DWG_SIZE={wg_size} {self._extra_build_options}')
         except cl.RuntimeError as exc:
             raise RuntimeError(
                 f"OpenCL kernel dynamic recompilation failed.\n"
@@ -293,7 +293,7 @@ class PyOpenCLMonteCarloAdapter(IMonteCarloAdapter):
         try:
             self._multi_program = cl.Program(
                 self._ctx, kernel_source
-            ).build(options=f"-I {self._mwc64x_include} -I {self._kernel_dir} -DWG_SIZE={self._compiled_wg_size} {self._extra_build_options}")
+            ).build(options=f'-I "{self._mwc64x_include}" -I "{self._kernel_dir}" -DWG_SIZE={self._compiled_wg_size} {self._extra_build_options}')
         except cl.RuntimeError as exc:
             raise RuntimeError(
                 f"OpenCL multi-habitat kernel compilation failed.\n"

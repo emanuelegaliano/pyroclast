@@ -25,6 +25,9 @@ dev = [
     "pytest-timeout",
     "sphinx>=7.0",
     "numpydoc>=1.7",
+    "pandas>=2.0",
+    "matplotlib>=3.7",
+    "seaborn>=0.12",
 ]
 
 [tool.hatch.build.targets.wheel]
