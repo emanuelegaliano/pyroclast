@@ -1,46 +1,37 @@
-# 0. Introduction
-Volcanic Eruption pose a significant threat to natural habitats, as lava flows can rapidly destroy a large amount of vegetation. Assessing the risk of habitat destruction, requires estimating, for each one of interest, the probability that a lava low will invade a sufficient fraction of its cells to cause irreversible damage.
-
-Given a pre-computed map of per-cell invasion probabilities derived from a Digital Elevation Model (DEM), this problem is naturally addressed through **Monte Carlo simulation**: for each run, each habitat cell is independently sampled against its invasion probability, and the habitat is considered destroyed if the fraction of invaded cells exceeds a critical threshold $\theta$.
-
-
-Since thousands of simulations per habitat are required to obtain statistically reliable estimates, this notebook explores the design and implementation of **GPU-parallel kernels** using it to accelerate the computation.
-
 ## Table of Contents
-- [0. Introduction](#0.-Introduction)
-  - [Setup: Synthetic Data Generation](#Setup:-Synthetic-Data-Generation)
-- [1. Kernel Monte Carlo](#1.-Kernel-Monte-Carlo)
-  - [Mathematical Formulation](#Mathematical-Formulation)
-  - [On-CPU Monte Carlo](#On-CPU-Monte-Carlo)
-  - [Standard Kernel](#Standard-Kernel)
-  - [1D Ping-pong Kernel](#1D-Ping-pong-Kernel)
-  - [Commutative Reduction Kernel](#Commutative-Reduction-Kernel)
-  - [Vectorized Kernels](#Vectorized-Kernels)
-  - [2D Topologies](#2D-Topologies)
-  - [Map-Centric Kernel](#Map-Centric-Kernel)
-  - [Global Seeding Kernel](#Global-Seeding-Kernel)
-  - [Multi-Habitat Sequential (Habitat-Centric) Kernels](#Multi-Habitat-Sequential-(Habitat-Centric)-Kernels)
-- [2. Preprocessing](#2.-Preprocessing)
-  - [Stream Compaction](#Stream-Compaction)
-- [3. Benchmarks](#3.-Benchmarks)
-  - [Grid Parameters Sweep (LWS vs GWS)](#3.1-Grid-Parameters-Sweep-(LWS-vs-GWS))
-  - [Simulation Scaling](#3.2-Simulation-Scaling)
-  - [Habitat Size Scaling](#Habitat-Size-Scaling)
-  - [Multi-Habitat Scaling](#Multi-Habitat-Scaling)
-  - [Preprocessing and Compaction](#Preprocessing-and-Compaction)
-  - [Random Number Generator Overhead](#Random-Number-Generator-Overhead)
-  - [2D Topology Aspect Ratio Sweep](#2D-Topology-Aspect-Ratio-Sweep)
-  - [Map-Centric vs Run-Centric Scaling](#Map-Centric-vs-Run-Centric-Scaling)
-- [4. Cross-Hardware Benchmark](#4.-Cross-Hardware-Benchmark)
-  - [Scoring Methodology](#Scoring-Methodology)
-  - [Simulation Scaling Score](#Simulation-Scaling-Score)
-  - [Habitat Scaling Score](#Habitat-Scaling-Score)
-  - [Size Scaling Score](#Size-Scaling-Score)
-  - [LWS/GWS Peak Throughput](#LWS/GWS-Peak-Throughput)
-  - [RNG Efficiency Factor](#RNG-Efficiency-Factor)
-  - [Summary](#Summary)
-## Setup: Synthetic Data Generation
-First, a synthetic Digital Elevation Model (DEM) is generated and the `generate_synthetic_habitat_dem` service from the `pyroclast` library is used to create a realistic habitat and invasion map. This data is reused across all subsequent examples.
+- [0. Introduction](#0-introduction)
+  - [Setup: Synthetic Data Generation](#setup-synthetic-data-generation)
+- [1. Kernel Monte Carlo](#1-kernel-monte-carlo)
+  - [Mathematical Formulation](#mathematical-formulation)
+  - [On-CPU Monte Carlo](#on-cpu-monte-carlo)
+  - [Standard Kernel](#standard-kernel)
+  - [1D Ping-pong Kernel](#1d-ping-pong-kernel)
+  - [Commutative Reduction Kernel](#commutative-reduction-kernel)
+  - [Vectorized Kernels](#vectorized-kernels)
+  - [2D Topologies](#2d-topologies)
+  - [Map-Centric Kernel](#map-centric-kernel)
+  - [Global Seeding Kernel](#global-seeding-kernel)
+  - [Multi-Habitat Sequential (Habitat-Centric) Kernels](#multi-habitat-sequential-habitat-centric-kernels)
+- [2. Preprocessing](#2-preprocessing)
+  - [Stream Compaction](#stream-compaction)
+- [3. Benchmarks](#3-benchmarks)
+  - [Grid Parameters Sweep (LWS vs GWS)](#grid-parameters-sweep-lws-vs-gws)
+  - [3.2 Simulation Scaling](#32-simulation-scaling)
+  - [Habitat Size Scaling](#habitat-size-scaling)
+  - [Multi-Habitat Scaling](#multi-habitat-scaling)
+  - [Preprocessing and Compaction](#preprocessing-and-compaction)
+  - [Random Number Generator Overhead](#random-number-generator-overhead)
+  - [2D Topology Aspect Ratio Sweep](#2d-topology-aspect-ratio-sweep)
+  - [Map-Centric vs Run-Centric Scaling](#map-centric-vs-run-centric-scaling)
+- [4. Cross-Hardware Benchmark](#4-cross-hardware-benchmark)
+  - [Scoring Methodology](#scoring-methodology)
+  - [Simulation Scaling Score](#simulation-scaling-score)
+  - [Habitat Scaling Score](#habitat-scaling-score)
+  - [Size Scaling Score](#size-scaling-score)
+  - [LWS/GWS Peak Throughput](#lwsgws-peak-throughput)
+  - [RNG Efficiency Factor](#rng-efficiency-factor)
+  - [Summary](#summary)
+
 
 
 ```python
