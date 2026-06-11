@@ -1485,6 +1485,14 @@ This section synthesises all individual benchmark results into a set of single c
 
 Only Monte Carlo (MC) kernels are considered. All kernels present in each sweep are included in the aggregate score.
 
+The following table summarises the key hardware specifications relevant to the performance analysis:
+
+| Label | GPU | Peak Compute (FP32) | Memory Bandwidth |
+|---|---|---|---|
+| **RTX 3050** | NVIDIA GeForce RTX 3050 (8 GB) | ~9.1 TFLOPs | 224 GB/s |
+| **RTX 4050 Laptop** | NVIDIA GeForce RTX 4050 Mobile | ~12.1 TFLOPs | 192 GB/s |
+| **RTX 4090** | NVIDIA GeForce RTX 4090 | 83.0 TFLOPs | 1008 GB/s |
+
 ## Scoring Methodology
 
 Three scoring formulas are applied, one per benchmark category:
@@ -1772,7 +1780,6 @@ plt.show()
 
 ## Summary
 
-All five scores are collected, normalised to `[0, 1]` (best GPU in each category = 1.0), and displayed as a grouped bar chart and a radar (spider) chart for direct visual comparison.
 
 
 ```python
@@ -1844,5 +1851,98 @@ plt.show()
 
     
 ![png](report_files/report_67_1.png)
+    
+
+
+### Performance Analysis relative to Hardware Specifications (Roofline Assessment)
+
+The **Roofline Model** is a visual performance model used to bound the performance of a given compute kernel on a specific architecture, relating computational performance to off-chip memory traffic. According to the model, the attainable performance is bounded by the following formula:
+
+$$\text{Attainable Performance} = \min(\text{Peak Compute}, \text{Peak Memory Bandwidth} \times \text{Operational Intensity})$$
+
+By comparing theoretical hardware ratios with our empirical scaling results, we can accurately determine the position of our Monte Carlo kernels on the Roofline plot.
+
+**Theoretical Hardware Ratios (RTX 4090 vs RTX 3050 8GB):**
+- **Peak Memory Bandwidth:** The RTX 4090 offers 1008 GB/s versus 224 GB/s on the RTX 3050, resulting in a ratio of exactly **4.5×**.
+- **Peak Compute Power (FP32):** The RTX 4090 delivers 83.0 TFLOPs versus ~9.1 TFLOPs on the RTX 3050, resulting in a ratio of roughly **9.1×**.
+
+**Empirical Performance Scaling:**
+The *Size Scaling Score*—our primary metric for sustained throughput across large spatial topologies—jumps from roughly **1.85 M-Sim/s** on the RTX 3050 to **16.30 M-Sim/s** on the RTX 4090. This yields an empirical performance speedup of approximately **8.8×**.
+
+**Roofline Conclusion & Algorithmic Justification:**
+Because the actual performance scaling (~8.8×) almost perfectly mirrors the compute power ratio (~9.1×) rather than the memory bandwidth ratio (4.5×), the Monte Carlo simulation kernels are strictly **Compute-Bound**. 
+
+In the context of the Roofline Model, the algorithm operates far to the right of the *ridge point*, resting on the flat, horizontal "Compute Roof". This happens because the kernel possesses an extremely high **Operational Intensity** (also known as Arithmetic Intensity, defined as operations per byte of DRAM traffic). 
+
+The only data explicitly loaded from the Global Memory is the relatively small probability map (`p_vec`), which easily fits into the GPU's L1/L2 caches, making the off-chip memory traffic strictly minimal. Conversely, generating pseudo-random numbers via the MWC64X generator and evaluating spatial destruction conditions requires hundreds of arithmetic and bitwise operations per simulation step. With a massive operations numerator and a near-zero memory traffic denominator, performance is constrained entirely by the peak arithmetic throughput (ALUs) rather than VRAM bandwidth.
+
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Official hardware specifications for the three GPUs
+gpus = {
+    "RTX 3050": {"peak_compute": 9.1, "bandwidth": 224.0, "color": "#66BB6A"},
+    "RTX 4050 Laptop": {"peak_compute": 12.1, "bandwidth": 192.0, "color": "#42A5F5"},
+    "RTX 4090": {"peak_compute": 83.0, "bandwidth": 1008.0, "color": "#FF7043"}
+}
+
+# Estimated operational intensity of the Monte Carlo algorithm
+# MWC64X generator executes many IOPs for every single float read.
+oi_algorithm = 150.0 
+
+# Operational Intensity range for the plot (log scale)
+oi_range = np.logspace(-1, 3, 500)
+
+plt.figure(figsize=(11, 7), facecolor="#1a1a2e")
+ax = plt.gca()
+ax.set_facecolor("#16213e")
+
+for name, specs in gpus.items():
+    # Ridge point calculation: OI where Memory-Bound meets Compute-Bound
+    # peak_compute (TFLOPs) = (bandwidth (GB/s) / 1000) * ridge_point
+    ridge_point = specs["peak_compute"] / (specs["bandwidth"] / 1000.0)
+    
+    # Roofline calculation: min(Bandwidth * OI, Peak Compute)
+    roofline = np.minimum(specs["bandwidth"] * oi_range / 1000.0, specs["peak_compute"])
+    plt.plot(oi_range, roofline, label=f"{name} Roofline", color=specs["color"], linewidth=2.5)
+    
+    # Plot the Ridge Point marker (small 'x')
+    plt.scatter(ridge_point, specs["peak_compute"], color="white", marker='x', s=40, zorder=4, alpha=0.7)
+    
+    # Operating point of the algorithm on the GPU's flat roof
+    perf_algorithm = np.minimum(specs["bandwidth"] * oi_algorithm / 1000.0, specs["peak_compute"])
+    plt.scatter(oi_algorithm, perf_algorithm, color=specs["color"], edgecolors='#0d0d1a', s=120, zorder=5)
+
+# Vertical line indicating the Operational Intensity of our code
+plt.axvline(oi_algorithm, color='#cdd6f4', linestyle='--', alpha=0.6, 
+            label=f'MC Algorithm (OI ~ {oi_algorithm})')
+
+# Annotations for the regions (placed dynamically based on the log scale)
+plt.text(1.5, 100, "Compute-Bound Region (Flat Roof)", color='#cdd6f4', alpha=0.5, fontsize=10, fontweight='bold')
+plt.text(0.12, 1.5, "Memory-Bound\nRegion (Slope)", color='#cdd6f4', alpha=0.5, fontsize=10, fontweight='bold', rotation=45)
+
+# Theme styling matching previous charts
+plt.xscale('log')
+plt.yscale('log')
+plt.xlabel('Operational Intensity (Operations / Byte)', color='#cdd6f4', fontsize=11)
+plt.ylabel('Attainable Performance (TFLOPs / s)', color='#cdd6f4', fontsize=11)
+plt.title('Theoretical Roofline Model & Algorithm Positioning', color='#cdd6f4', fontsize=13, fontweight='bold')
+
+# Grid and ticks styling
+plt.grid(True, which="both", linestyle="--", color="#2a2a4a", alpha=0.8)
+ax.tick_params(colors='#cdd6f4', which='both')
+
+# Legend styling
+plt.legend(facecolor="#1a1a2e", edgecolor="#333344", labelcolor='#cdd6f4', loc='lower right', framealpha=0.9)
+
+plt.tight_layout()
+plt.show()
+```
+
+
+    
+![png](report_files/report_69_0.png)
     
 
