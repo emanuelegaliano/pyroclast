@@ -75,7 +75,7 @@ def generate_synthetic_habitat_dem(
     occupancy_fraction: float,
     mean_p: float,
     seed: int = 42,
-    habitat_code: str = "SYNTH_DEM",
+    habitat_code: str = "SYNTH_HABITAT",
     threshold: float = 0.28,
 ) -> tuple[RasterMap, RasterMap]:
     """Generate a synthetic habitat map and an invasion probability map based on a DEM.

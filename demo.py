@@ -1,282 +1,206 @@
-import os
-from pathlib import Path
+#!/usr/bin/env python3
+"""
+Pyroclast Library Demo
+----------------------
+A unified entry point for testing and benchmarking the various OpenCL 
+Monte Carlo kernels and stream compaction algorithms in Pyroclast.
+"""
 
-import numpy as np
-import pandas as pd
-import streamlit as st
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import matplotlib.colors
-import rasterio
-from rasterio.warp import reproject, Resampling
+import argparse
+import logging
+import os
+import time
+
 from dotenv import load_dotenv
 
+# Domain and Data Models
+from pyroclast.domain.models import MonteCarloConfig, SpatialHabitat, GridTopology
+
+# I/O and Synthetics
 from pyroclast import (
-    FileMapRepository,
-    HabitatCriteria,
+    FileMapRepository, 
+    HabitatCriteria, 
     InvasionCriteria,
-    PyOpenCLAdapter,
+    generate_synthetic_dem, 
+    generate_synthetic_habitat_dem
+)
+
+# Monte Carlo Adapters
+from pyroclast.adapters import (
     PyOpenCLMonteCarloAdapter,
+    PyOpenCLMonteCarlo2DAdapter,
+    PyOpenCLMonteCarlo2DTransposedAdapter,
+    PyOpenCLMonteCarloCommutativeAdapter,
+    PyOpenCLMonteCarloContiguousAdapter,
+    PyOpenCLMonteCarloGlobalSeedAdapter,
     PyOpenCLMonteCarloPingPongAdapter,
-)
-from pyroclast.domain.models import MonteCarloConfig
-from pyroclast.services import run_preprocessing_batch
-
-# ── 1. Page Config & Load Environment ─────────────────────────
-st.set_page_config(
-    page_title="Pyroclast Demo — Monte Carlo GPU",
-    page_icon="🌋",
-    layout="wide",
+    PyOpenCLMonteCarloVectorizedAdapter,
+    PyOpenCLMonteCarloVectorizedPingPongAdapter,
+    PyOpenCLMapCentricAdapter,
 )
 
-load_dotenv()
-
-# ── 2. Constants & Helpers ────────────────────────────────────
-def get_habitat_colors(codes):
-    """Generate a stable color mapping for a list of habitat codes."""
-    cmap = plt.get_cmap("tab10") 
-    return {code: matplotlib.colors.to_hex(cmap(i % 10)) for i, code in enumerate(sorted(codes))}
-
-def _hillshade(elevation: np.ndarray, azimuth_deg: float = 315.0, altitude_deg: float = 45.0) -> np.ndarray:
-    azimuth = np.radians(360.0 - azimuth_deg)
-    altitude = np.radians(altitude_deg)
-    dy, dx = np.gradient(elevation.astype(np.float64))
-    slope = np.arctan(np.sqrt(dx**2 + dy**2))
-    aspect = np.arctan2(-dy, dx)
-    shade = (
-        np.sin(altitude) * np.cos(slope)
-        + np.cos(altitude) * np.sin(slope) * np.cos(azimuth - aspect)
-    )
-    return np.clip(shade, 0.0, 1.0).astype(np.float32)
-
-def _load_dem_reprojected(dem_path: Path, ref_crs, ref_transform, ref_shape) -> np.ndarray:
-    rows, cols = ref_shape
-    dst = np.empty((rows, cols), dtype=np.float32)
-    with rasterio.open(dem_path) as src:
-        reproject(
-            source=rasterio.band(src, 1),
-            destination=dst,
-            src_crs=src.crs,
-            src_transform=src.transform,
-            dst_crs=ref_crs,
-            dst_transform=ref_transform,
-            resampling=Resampling.bilinear,
-        )
-    dst[dst <= -9999] = np.nan
-    return dst
-
-# ── 3. Sidebar Configuration ──────────────────────────────────
-st.sidebar.title("🌋 Pyroclast Config")
-
-data_path_env = os.getenv("DATA_PATH", "data").strip('"\' ')
-data_path = st.sidebar.text_input("Data Path", value=data_path_env)
-invasion_map_env = os.getenv("INVASION_MAP", "").strip('"\' ')
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("Monte Carlo Parameters")
-mc_runs = int(st.sidebar.number_input("Total Simulations (R)", value=1_000_000, step=100_000, min_value=1))
-mc_threshold = float(st.sidebar.number_input("Threshold (θ)", value=0.005, format="%.4f", step=0.0001, min_value=0.0, max_value=1.0))
-mc_seed = int(st.sidebar.number_input("Random Seed", value=42, help="Il seed inizializza il generatore di numeri casuali MWC64X. Usare lo stesso seed permette di replicare esattamente gli stessi risultati."))
-mc_batches = int(st.sidebar.number_input("Batches", value=10, min_value=1))
-
-# Choose Monte Carlo Kernel/Adapter
-mc_adapter_choice = st.sidebar.selectbox(
-    "Kernel Variant",
-    options=[
-        "Standard (1-D)",
-        "Ping-Pong (1-D)",
-    ],
-    index=0
+# Compaction Adapters
+from pyroclast.adapters import (
+    PyOpenCLHostScalarCompactionAdapter,
+    PyOpenCLHostNonzeroCompactionAdapter,
+    PyOpenCLHostCompressCompactionAdapter,
+    PyOpenCLGPUScalarCompactionAdapter,
+    PyOpenCLGPUVectorizedCompactionAdapter,
 )
 
-st.sidebar.markdown("---")
-if st.sidebar.button("Clear Cache"):
-    st.cache_data.clear()
-    st.cache_resource.clear()
-    st.info("Cache cleared.")
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logger = logging.getLogger(__name__)
 
-# ── 4. Main App Logic ─────────────────────────────────────────
-st.title("Monte Carlo GPU Simulation")
-st.markdown(f"""
-Questa demo esegue la simulazione Monte Carlo per il calcolo della probabilità di distruzione 
-degli habitat a causa della colata lavica, utilizzando il kernel **{mc_adapter_choice}** su GPU.
-""")
-
-_MC_CHOICES = {
-    "Standard (1-D)": PyOpenCLMonteCarloAdapter,
-    "Ping-Pong (1-D)": PyOpenCLMonteCarloPingPongAdapter,
+COMPACTION_MAP = {
+    "host_scalar": PyOpenCLHostScalarCompactionAdapter,
+    "host_nonzero": PyOpenCLHostNonzeroCompactionAdapter,
+    "host_compress": PyOpenCLHostCompressCompactionAdapter,
+    "gpu_scalar": PyOpenCLGPUScalarCompactionAdapter,
+    "gpu_vectorized": PyOpenCLGPUVectorizedCompactionAdapter,
 }
 
-@st.cache_resource
-def get_preprocess_adapter():
-    return PyOpenCLAdapter()
+KERNEL_MAP = {
+    "standard": PyOpenCLMonteCarloAdapter,
+    "2d": PyOpenCLMonteCarlo2DAdapter,
+    "2d_transposed": PyOpenCLMonteCarlo2DTransposedAdapter,
+    "commutative": PyOpenCLMonteCarloCommutativeAdapter,
+    "contiguous": PyOpenCLMonteCarloContiguousAdapter,
+    "global_seed": PyOpenCLMonteCarloGlobalSeedAdapter,
+    "map_centric": PyOpenCLMapCentricAdapter,
+    "pingpong": PyOpenCLMonteCarloPingPongAdapter,
+    "vectorized": PyOpenCLMonteCarloVectorizedAdapter,
+    "vectorized_pingpong": PyOpenCLMonteCarloVectorizedPingPongAdapter,
+}
 
-@st.cache_resource
-def get_mc_adapter(choice: str):
-    adapter_cls = _MC_CHOICES[choice]
-    return adapter_cls(profiling=True)
+def main():
+    parser = argparse.ArgumentParser(description="Pyroclast OpenCL Benchmarking Demo")
+    parser.add_argument("--monte_carlo", type=str, default="standard", choices=list(KERNEL_MAP.keys()),
+                        help="Select the Monte Carlo kernel to execute.")
+    parser.add_argument("--compaction", type=str, default="host_nonzero", choices=list(COMPACTION_MAP.keys()),
+                        help="Select the Stream Compaction algorithm.")
+    parser.add_argument("--synthetic", action="store_true",
+                        help="Use synthetically generated random data instead of loading from .env dataset.")
+    parser.add_argument("--runs", type=int, default=10000,
+                        help="Number of Monte Carlo simulations to run.")
+    parser.add_argument("--threshold", type=float, default=0.005,
+                        help="Critical threshold for habitat destruction.")
+    parser.add_argument("--multi", action="store_true",
+                        help="Process multiple habitats concurrently if available.")
+    parser.add_argument("--gws", type=int, default=65536,
+                        help="Global Work Size (GWS) for Monte Carlo kernels.")
+    parser.add_argument("--lws", type=int, default=256,
+                        help="Local Work Size (LWS) for Monte Carlo kernels.")
+    
+    args = parser.parse_args()
+    
+    if args.monte_carlo in ("2d", "2d_transposed"):
+        logger.warning(f"Kernel '{args.monte_carlo}' requires a 2D topology. Ignoring --gws and --lws, falling back to auto-topology.")
+        config = MonteCarloConfig(n_runs=args.runs, threshold=args.threshold, seed=42)
+    else:
+        topology = GridTopology(gws=args.gws, lws=args.lws)
+        config = MonteCarloConfig(n_runs=args.runs, threshold=args.threshold, seed=42, topology=topology)
+    
+    logger.info("=== Pyroclast Execution Demo ===")
+    logger.info(f"Monte Carlo Kernel : {args.monte_carlo}")
+    logger.info(f"Stream Compaction  : {args.compaction}")
+    logger.info(f"Data Mode          : {'Synthetic' if args.synthetic else 'Real FileSystem (.env)'}")
+    logger.info(f"Runs               : {args.runs}")
+    logger.info(f"Threshold          : {args.threshold}")
+    logger.info(f"Global Work Size   : {args.gws}")
+    logger.info(f"Local Work Size    : {args.lws}")
+    logger.info(f"Multi-Habitat      : {args.multi}\n")
 
-@st.cache_data
-def load_data(path, invasion_map_path):
-    repo = FileMapRepository(path, invasion_map=invasion_map_path)
-    habitats = repo.matching(HabitatCriteria())
-    invasion = repo.get(InvasionCriteria())
-    return repo, habitats, invasion
-
-try:
-    preprocess_adapter = get_preprocess_adapter()
-    mc_adapter = get_mc_adapter(mc_adapter_choice)
-    repo, habitats, invasion = load_data(data_path, invasion_map_env)
-    
-    all_codes = [h.code for h in habitats]
-    habitat_colors = get_habitat_colors(all_codes)
-    
-    col1, col2 = st.columns([1, 1.2])
-    
-    with col1:
-        st.subheader("Habitats Selection")
-        selected_codes = st.multiselect(
-            "Select Habitats to display and simulate",
-            options=all_codes,
-            default=[all_codes[0]] if all_codes else []
+    # 1. Data Loading
+    if args.synthetic:
+        logger.info("Generating synthetic DEMs...")
+        dem = generate_synthetic_dem(shape=(2000, 2000), max_elevation=3000.0)
+        hab_map1, inv_map = generate_synthetic_habitat_dem(
+            dem=dem, occupancy_fraction=0.01, mean_p=0.5, seed=10, habitat_code="SYNTH_1"
         )
-        
-        if not selected_codes:
-            st.warning("Please select at least one habitat.")
-        else:
-            cache_dir = Path(data_path) / "cache"
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            
-            with st.spinner("Compacting habitats..."):
-                compacted_list = run_preprocessing_batch(
-                    repo=repo,
-                    compute=preprocess_adapter,
-                    criteria=HabitatCriteria(code=None),
-                    cache_dir=cache_dir
-                )
-                compacted_habitats = [h for h in compacted_list if h.habitat_code in selected_codes]
-            
-            summary_data = []
-            for ch in compacted_habitats:
-                color = habitat_colors.get(ch.habitat_code, "#FFFFFF")
-                summary_data.append({
-                    "Color": "●",
-                    "Habitat": ch.habitat_code,
-                    "At-risk Cells": ch.n_cells,
-                    "Mean P": round(ch.mean_probability, 6),
-                    "_color": color
-                })
-            
-            df = pd.DataFrame(summary_data)
-            def style_df(styler):
-                for i, row in df.iterrows():
-                    styler.set_properties(subset=pd.IndexSlice[i, "Color"], **{'color': row._color, 'font-size': '20px'})
-                return styler
-
-            st.dataframe(
-                df.drop(columns=["_color"]).style.pipe(style_df),
-                hide_index=True,
-                use_container_width=True
+        if args.multi:
+            hab_map2, _ = generate_synthetic_habitat_dem(
+                dem=dem, occupancy_fraction=0.015, mean_p=0.5, seed=20, habitat_code="SYNTH_2"
             )
+            hab_maps = [hab_map1, hab_map2]
+        else:
+            hab_maps = [hab_map1]
+    else:
+        logger.info("Loading real maps via FileMapRepository...")
+        load_dotenv()
+        data_path = os.getenv("DATA_PATH", "data")
+        try:
+            repo = FileMapRepository(data_path)
+            inv_map = repo.get(InvasionCriteria())
+            all_habs = repo.matching(HabitatCriteria())
+            if not all_habs:
+                raise ValueError("No habitats found in the repository!")
+            hab_maps = all_habs if args.multi else [all_habs[0]]
+        except Exception as e:
+            logger.error(f"Failed to load data from {data_path}: {e}")
+            return
             
-            if st.button("🚀 Run Monte Carlo for all selected", type="primary"):
-                st.subheader("Simulation Results")
-                
-                results = {}
-                for hab in compacted_habitats:
-                    status_placeholder = st.empty()
-                    progress_bar = st.progress(0)
-                    
-                    config = MonteCarloConfig(
-                        n_runs=mc_runs,
-                        threshold=mc_threshold,
-                        seed=mc_seed
-                    )
-                    
-                    def _progress_callback(i, total, partial_prob, code=hab.habitat_code):
-                        progress = (i + 1) / total
-                        progress_bar.progress(progress)
-                        status_placeholder.text(f"Habitat {code}: Batch {i+1}/{total} — P ≈ {partial_prob:.6f}")
-                    
-                    prob = mc_adapter.run_batched(
-                        hab, 
-                        config, 
-                        n_batches=mc_batches, 
-                        callback=_progress_callback
-                    )
-                    results[hab.habitat_code] = prob
-                    status_placeholder.empty()
-                    progress_bar.empty()
-                
-                st.write("### Final Probabilities")
-                for code, p in results.items():
-                    color = habitat_colors.get(code, "#FFFFFF")
-                    st.markdown(f"<span style='color:{color}; font-size:1.5rem;'>●</span> Habitat **{code}** : <span style='color:{color}; font-weight:bold; font-size:1.2rem;'>{p:.6f}</span>", unsafe_allow_html=True)
-                
-                if mc_adapter._kernel_launches:
-                    bench = mc_adapter.benchmark()[0]
-                    st.info(f"**Performance:** {bench.mean_ms:.3f} ms/kernel | {bench.bandwidth_gbs:.2f} GB/s")
-                    mc_adapter.reset_profile()
-
-    with col2:
-        st.subheader("Map Visualization")
+    # 2. Edge Case: Map-Centric
+    if args.monte_carlo == "map_centric":
+        logger.warning("Map-Centric kernel selected: Skipping stream compaction as it operates on raw spatial masks.")
+        spatial_habitats = []
+        for h in hab_maps:
+            spatial_habitats.append(SpatialHabitat(
+                habitat_code=h.code,
+                presence_mask=h.data,
+                threshold=args.threshold
+            ))
+            
+        adapter = KERNEL_MAP["map_centric"](profiling=True)
+        logger.info("Warming up OpenCL Map-Centric Adapter...")
+        adapter.run_map(inv_map.data, spatial_habitats, config)
         
-        @st.cache_data
-        def generate_map(path, invasion_map_path):
-            dem_path_env = os.getenv("DEM_PATH", "").strip('"\' ')
-            if not dem_path_env:
-                raise ValueError("DEM_PATH not set in .env")
-            
-            dem_path = Path(dem_path_env)
-            inv_p = Path(invasion_map_path) if invasion_map_path else sorted(Path(path).glob("*.tif"))[0]
-            
-            with rasterio.open(inv_p) as ref:
-                ref_crs = ref.crs
-                ref_transform = ref.transform
-                ref_shape = ref.shape
-            
-            dem = _load_dem_reprojected(dem_path, ref_crs, ref_transform, ref_shape)
-            shade = _hillshade(dem)
-            return shade, dem
+        logger.info("Executing Map-Centric Kernel...")
+        t0 = time.perf_counter()
+        results = adapter.run_map(inv_map.data, spatial_habitats, config)
+        t1 = time.perf_counter()
         
-        if selected_codes:
-            try:
-                shade, dem = generate_map(data_path, invasion_map_env)
-                
-                fig, ax = plt.subplots(figsize=(8, 7))
-                fig.patch.set_facecolor("#0e1117")
-                ax.set_facecolor("#0e1117")
-                
-                ax.imshow(shade, cmap="gray", vmin=0, vmax=1, interpolation="bilinear")
-                
-                dem_masked = np.where(np.isnan(dem), np.nanmin(dem), dem)
-                ax.imshow(dem_masked, cmap="terrain", alpha=0.3, interpolation="bilinear")
-                
-                inv_data = invasion.data
-                inv_masked = np.ma.masked_where(inv_data == 0, inv_data)
-                ax.imshow(inv_masked, cmap="YlOrRd", alpha=0.5)
-                
-                legend_patches = []
-                for code in selected_codes:
-                    h_map = next(h for h in habitats if h.code == code)
-                    mask = h_map.data
-                    color = habitat_colors.get(code, "#00ff00")
-                    rgba = np.zeros((*mask.shape, 4), dtype=np.float32)
-                    r, g, b = matplotlib.colors.to_rgb(color)
-                    rgba[mask == 1] = [r, g, b, 0.7]
-                    ax.imshow(rgba, interpolation="none")
-                    legend_patches.append(mpatches.Patch(color=color, label=f"Habitat {code}"))
-                
-                if legend_patches:
-                    ax.legend(handles=legend_patches, loc="lower left", facecolor="#1e1e1e", labelcolor="white")
-                
-                ax.axis("off")
-                st.pyplot(fig)
-                
-            except Exception as e:
-                st.error(f"Error generating map: {e}")
-                st.warning("Ensure DEM_PATH is correct in .env and files exist.")
+        logger.info(f"Finished in {(t1-t0)*1000:.3f} ms")
+        for code, prob in results.items():
+            logger.info(f"Habitat {code} P(destruction) = {prob:.6f}")
+        return
 
-except Exception as e:
-    st.error(f"An error occurred: {e}")
-    st.info("Please check your .env configuration and data path.")
+    # 3. Stream Compaction
+    logger.info("Starting Stream Compaction preprocessing...")
+    compaction_adapter = COMPACTION_MAP[args.compaction](profiling=True)
+    
+    t0 = time.perf_counter()
+    compacted_habitats = compaction_adapter.batch_preprocess(inv_map, hab_maps)
+    t1 = time.perf_counter()
+    logger.info(f"Stream Compaction finished in {(t1-t0)*1000:.3f} ms")
+    
+    # 4. Monte Carlo Execution
+    logger.info(f"Instantiating {args.monte_carlo} Monte Carlo Adapter...")
+    mc_adapter = KERNEL_MAP[args.monte_carlo](profiling=True)
+    
+    logger.info("Warming up OpenCL kernels...")
+    try:
+        if args.multi and len(compacted_habitats) > 1:
+            mc_adapter.run_multi_habitats(compacted_habitats, config)
+        else:
+            mc_adapter.run(compacted_habitats[0], config)
+            
+        logger.info("Executing timed Monte Carlo Kernel...")
+        t0 = time.perf_counter()
+        
+        if args.multi and len(compacted_habitats) > 1:
+            probs = mc_adapter.run_multi_habitats(compacted_habitats, config)
+            t1 = time.perf_counter()
+            logger.info(f"Finished multi-habitat run in {(t1-t0)*1000:.3f} ms")
+            for h, prob in zip(compacted_habitats, probs):
+                logger.info(f"Habitat {h.habitat_code} P(destruction) = {prob:.6f}")
+        else:
+            prob = mc_adapter.run(compacted_habitats[0], config)
+            t1 = time.perf_counter()
+            logger.info(f"Finished single-habitat run in {(t1-t0)*1000:.3f} ms")
+            logger.info(f"Habitat {compacted_habitats[0].habitat_code} P(destruction) = {prob:.6f}")
+    except (FileNotFoundError, NotImplementedError) as e:
+        logger.error(f"Kernel {args.monte_carlo} does not support multi-habitat execution: {e}")
+
+
+if __name__ == "__main__":
+    main()

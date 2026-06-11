@@ -74,7 +74,7 @@ void local_memory_scan(
 /* ===========================================================================
  * Kernel 3 — scan_k
  *
- * Performs an inclusive parallel prefix scan over the predicates array using
+ * Performs an exclusive parallel prefix scan over the predicates array using
  * vectorized (int4) loads/stores and sliding windows.
  * =========================================================================== */
 __kernel void scan_k(

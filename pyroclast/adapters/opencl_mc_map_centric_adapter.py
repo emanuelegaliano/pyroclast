@@ -171,7 +171,7 @@ class PyOpenCLMapCentricAdapter(PyOpenCLMonteCarloAdapter):
                 self._ctx, mf.READ_WRITE, size=num_habitats * n_wg * 4
             )
 
-            self._kernel(
+            event = self._kernel(
                 self._queue,
                 (gws,),
                 (lws,),
@@ -186,6 +186,14 @@ class PyOpenCLMapCentricAdapter(PyOpenCLMonteCarloAdapter):
                 np.uint64(int(config.seed)),
                 np.uint32(config.n_runs),
             )
+
+            if self._profiling:
+                event.wait()
+                elapsed_ms = (event.profile.end - event.profile.start) * 1e-6
+                self._last_n_cells = n_map_cells
+                self._last_n_wg = n_wg
+                self._last_kernel_name = self._SAMPLING_KERNEL_NAME
+                self._kernel_launches.append((elapsed_ms, 0))
 
             # Host-side reduction of the small [num_habitats x n_wg] partials.
             partial_host = np.empty(num_habitats * n_wg, dtype=np.int32)
