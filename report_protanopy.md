@@ -1,3 +1,11 @@
+# 0. Introduction
+Volcanic Eruption pose a significant threat to natural habitats, as lava flows can rapidly destroy a large amount of vegetation. Assessing the risk of habitat destruction, requires estimating, for each one of interest, the probability that a lava low will invade a sufficient fraction of its cells to cause irreversible damage.
+
+Given a pre-computed map of per-cell invasion probabilities derived from a Digital Elevation Model (DEM), this problem is naturally addressed through **Monte Carlo simulation**: for each run, each habitat cell is independently sampled against its invasion probability, and the habitat is considered destroyed if the fraction of invaded cells exceeds a critical threshold $\theta$.
+
+
+Since thousands of simulations per habitat are required to obtain statistically reliable estimates, this notebook explores the design and implementation of **GPU-parallel kernels** using it to accelerate the computation.
+
 ## Table of Contents
 - [0. Introduction](#0-introduction)
   - [Setup: Synthetic Data Generation](#setup-synthetic-data-generation)
@@ -32,6 +40,8 @@
   - [RNG Efficiency Factor](#rng-efficiency-factor)
   - [Summary](#summary)
 
+## Setup: Synthetic Data Generation
+First, a synthetic Digital Elevation Model (DEM) is generated and the `generate_synthetic_habitat_dem` service from the `pyroclast` library is used to create a realistic habitat and invasion map. This data is reused across all subsequent examples.
 
 
 ```python
@@ -144,23 +154,23 @@ For a single simulation identified by the index $r$, where $0 \leq r < R$, the f
 
 1. **Sampling**: For each individual cell $k$ of the habitat, a pseudo-random number $X_{r, k} \sim \mathcal{U}(0, 1)$ is drawn.
 2. **Invasion Evaluation**: Cell $k$ is considered "invaded" by lava in simulation $r$ if the draw value is less than or equal to its invasion probability, i.e., if $X_{r, k} \leq p_k$. This can be formalized with an indicator function:
-   $$
+$$
    I_{r, k} = \begin{cases}
        1 & \text{if } X_{r, k} \leq p_k \\
        0 & \text{otherwise}
    \end{cases}
-   $$
+$$
 3. **Destruction Assessment**: The total number of invaded cells in simulation $r$ is first defined as:
-   $$
+$$
    C_r = \sum_{k=0}^{N_c-1} I_{r, k}
-   $$
+$$
    and then the habitat is considered destroyed in run $r$ if the fraction of invaded cells exceeds the critical threshold $\theta$ (normalized by the total number of cells):
-   $$
+$$
    D_r = \begin{cases}
        1 & \text{if } \frac{C_r}{N_c} \geq \theta \\
        0 & \text{otherwise}
    \end{cases}
-   $$
+$$
 
 ### Monte Carlo Estimator
 The ultimate goal of the parallel execution is to compute the total number of simulations that resulted in habitat destruction. This requires summing $D_r$ over all $R$ runs. The Monte Carlo estimator for the probability of habitat destruction, which represents the overall probability of destruction $\hat{P}_{\text{destruction}}$, is estimated as:
@@ -228,13 +238,13 @@ To resolve this limitation, a **sliding window** (grid-stride loop) approach is 
 #### Time Complexity
 The time complexity of the kernel can be divided into two principal components:
 1. **Sampling and Monte Carlo Run**: The kernel does not map a single work-item per run, so the loop iterates over runs for a total of $R/P$ iterations. For each run, the kernel iterates over the $N_c$ cells of the habitat in order to evaluate the invasion, resulting in a time complexity of:
-   $$
+$$
    \mathcal{O}\left(\frac{R}{P} \cdot N_c\right)
-   $$
+$$
 2. **Reduction**: After all work-items have completed their assigned runs, a reduction operation is performed to sum the results of all simulations. The tree reduction operates on an array in local memory of size $L$ (the number of work-items in a work-group) and since LWS is a power of 2, the reduction divides the problem size by 2 at each step, resulting in a time complexity of:
-   $$
+$$
    \mathcal{O}(\log_2 L)
-   $$
+$$
 
 Finally, the overall time complexity of the kernel can be expressed as:
 $$
@@ -421,13 +431,13 @@ The vectorized kernel design offers significant performance advantages by maximi
 #### Proportion Z-Test
 To mitigate this issue, a proportion Z-test can be performed on the outputs of the scalar and vectorized kernels. The hypotheses are defined as:
 - Null Hypothesis $H_0$: The probability of habitat destruction estimated by the scalar kernel is equal to the probability estimated by the vectorized kernel.
-  $$
+$$
   \hat{P}_{\text{destruction, scalar}} = \hat{P}_{\text{destruction, vectorized}}
-  $$
+$$
 - Alternative Hypothesis $H_1$: The probability of habitat destruction estimated by the scalar kernel is not equal to the probability estimated by the vectorized kernel.
-  $$
+$$
   \hat{P}_{\text{destruction, scalar}} \neq \hat{P}_{\text{destruction, vectorized}}
-  $$
+$$
 
 To perform the test, the following data must be collected:
 - **Simulations**: $R$ simulations are run on both kernels and the number of simulations resulting in habitat destruction is recorded for each kernel, denoted as $D_{\text{scalar}}$ and $D_{\text{vectorized}}$ respectively.
@@ -599,7 +609,7 @@ The kernel is launched on a two-dimensional grid. The work-items along the fast 
 #### Interleaved Cell Partition
 How the $N_c$ cells are split among the $L_c$ cell lanes is the decisive design choice because it dictates the memory access pattern. An **interleaved** partition is adopted: cell lane $L$ is responsible for the cells $L, L+L_c, L+2L_c, \dots$ This is the same sliding window sweep that the baseline used over the run axis, only applied to the cells, and it is chosen precisely because at every step the $L_c$ lanes of a row touch $L_c$ consecutive addresses of `p_vec`. Consecutive work-items hitting consecutive addresses is the textbook condition for a coalesced global load.
 
-This partition also fixes the structure of the random-number stream. To keep the lanes independent while letting each one draw its samples sequentially, cell lane $L$ seeds the generator once at the stream position $\text{run\_base} + L \cdot G$ and draws $G = \lceil N_c / L_c \rceil$ samples, where a run owns the contiguous segment of length $\text{run\_stride} = G \cdot L_c$. No two lanes (and no two runs) ever share a stream position, so statistical independence is preserved. The 2D kernel is bit-exact with the vectorized kernel of equal width, but is *not* bit-exact with the scalar baseline. As in the vectorized case, `p_vec` is padded up to `run\_stride` with a $-1.0$ sentinel so that the trailing samples ($k \geq N_c$) satisfy $x \leq -1.0$ and never count as invaded, removing bounds checks from the hot loop.
+This partition also fixes the structure of the random-number stream. To keep the lanes independent while letting each one draw its samples sequentially, cell lane $L$ seeds the generator once at the stream position $\text{run-base} + L \cdot G$ and draws $G = \lceil N_c / L_c \rceil$ samples, where a run owns the contiguous segment of length $\text{run-stride} = G \cdot L_c$. No two lanes (and no two runs) ever share a stream position, so statistical independence is preserved. The 2D kernel is bit-exact with the vectorized kernel of equal width, but is *not* bit-exact with the scalar baseline. As in the vectorized case, `p_vec` is padded up to `run\_stride` with a $-1.0$ sentinel so that the trailing samples ($k \geq N_c$) satisfy $x \leq -1.0$ and never count as invaded, removing bounds checks from the hot loop.
 
 #### The Two Reductions
 Once every cell lane has finished its strided scan, the run is not yet resolved: each lane holds only a partial invaded count over the cells it owns, and these partials must be combined. The kernel does so with two reductions acting on the two orthogonal axes of the tile:
@@ -673,17 +683,17 @@ The **map-centric** kernel inverts this mapping: it sweeps the entire geographic
 The kernel is launched on the same 1D grid of work-items over the simulation axis $R$ as the baseline, and reuses the grid-stride loop. The fundamental difference lies in what a single run iterates over: instead of the $N_c$ cells of one habitat, a run now sweeps the $M$ cells of the whole map (more precisely, of the union footprint of the habitats in the current batch) and updates all of them simultaneously.
 
 #### Bitmask Encoding
-For each map cell $k$, a 64-bit presence bitmask `habitat_mask[k]` is provided by the host, in which bit $h$ is set if and only if habitat $h$ of the current batch occupies cell $k$. Because a `ulong` holds exactly 64 bits, at most $\text{MAX\_BATCH\_SIZE} = 64$ habitats can be encoded per launch; any larger problem is partitioned by the host into batches of at most 64 habitats. This compact encoding is what allows a single cell sweep to serve every habitat at once.
+For each map cell $k$, a 64-bit presence bitmask `habitat_mask[k]` is provided by the host, in which bit $h$ is set if and only if habitat $h$ of the current batch occupies cell $k$. Because a `ulong` holds exactly 64 bits, at most $\text{MAX-BATCH-SIZE} = 64$ habitats can be encoded per launch; any larger problem is partitioned by the host into batches of at most 64 habitats. This compact encoding is what allows a single cell sweep to serve every habitat at once.
 
 #### Single-Sweep Sampling and RNG Reuse
-For each run $r$, the generator is seeded exactly once, at the stream position $\text{base\_offset} + r \cdot M$, so that run $r$ owns the contiguous, non-overlapping stream segment $[\text{base\_offset} + r\cdot M, \text{base\_offset} + (r+1)\cdot M)$. The work-item then sweeps all $M$ cells: a cell whose mask is zero (no habitat present) is skipped outright, while for every non-empty cell a single step produces a draw $x_k \sim \mathcal{U}(0,1)$. If $x_k \leq p_k$, the cell is credited to all the habitats present in it. Crucially, the per-cell RNG cost is identical to the habitat-centric baseline (one draw per cell), so the saving from overlap reuse is genuine: a cell shared by ten habitats is sampled once instead of ten times.
+For each run $r$, the generator is seeded exactly once, at the stream position $\text{base-offset} + r \cdot M$, so that run $r$ owns the contiguous, non-overlapping stream segment $[\text{base-offset} + r\cdot M, \text{base-offset} + (r+1)\cdot M)$. The work-item then sweeps all $M$ cells: a cell whose mask is zero (no habitat present) is skipped outright, while for every non-empty cell a single step produces a draw $x_k \sim \mathcal{U}(0,1)$. If $x_k \leq p_k$, the cell is credited to all the habitats present in it. Crucially, the per-cell RNG cost is identical to the habitat-centric baseline (one draw per cell), so the saving from overlap reuse is genuine: a cell shared by ten habitats is sampled once instead of ten times.
 
 #### Branchless Accumulation
 Once a cell is found to be invaded, the kernel distributes the outcome to the habitats through the inner update:
 ```c
 run_invaded[h] += (mask >> h) & 1
 ```
-Rather than branching on whether each habitat is present—which would introduce work-item divergence within a sub-group—the kernel unconditionally extracts bit $h$ and adds it to the corresponding counter. The increment is therefore 1 for a present habitat and 0 otherwise, with no divergent control flow. After the sweep, each habitat's destruction is assessed with the strict-threshold rule: the run is a destruction event for habitat $h$ if and only if $\text{run\_invaded[h]} / \text{hab\_total\_cells[h]} \geq \theta_h$.
+Rather than branching on whether each habitat is present—which would introduce work-item divergence within a sub-group—the kernel unconditionally extracts bit $h$ and adds it to the corresponding counter. The increment is therefore 1 for a present habitat and 0 otherwise, with no divergent control flow. After the sweep, each habitat's destruction is assessed with the strict-threshold rule: the run is a destruction event for habitat $h$ if and only if $\text{run-invaded}[h] / \text{hab-total-cells}[h] \geq \theta_h$.
 
 #### Two-Dimensional Local Reduction
 The work-group then collapses the per-work-item destruction counts for all habitats at once. The local `scratch` buffer is laid out as `scratch[h * L + lid]`—one row per habitat, one column per lane—and the usual power-of-2 tree reduction runs over the lane axis for every habitat row. This transposed layout is deliberately bank-conflict free: consecutive lanes within a habitat row map to consecutive memory banks (stride 1), so the work-items of a sub-group never contend for the same bank. Finally, `lid 0` writes each habitat's group total to `partial[h * n_wg + group_id]`, and the host closes the reduction by summing the $n_{wg}$ partials of each habitat.
@@ -691,7 +701,7 @@ The work-group then collapses the per-work-item destruction counts for all habit
 ### Trade-offs
 The map-centric design trades the redundant sampling of overlapping habitats for a heavier per-cell update, and whether this trade is favorable depends entirely on how much the habitats actually overlap:
 - **Benefit (RNG reuse)**: The single map sweep amortizes the cost of random number generation across all habitats sharing a cell. The deeper the geographic overlap, the larger the saving, since the number of draws is bounded by the union footprint $M$ rather than by the sum of individual habitat sizes.
-- **Cost (branchless inner loop)**: The very feature that removes divergence also removes the ability to skip absent habitats: the inner loop performs $H = \text{num\_habitats}$ iterations for every invaded cell, regardless of how many habitats truly occupy it. The accumulation cost thus scales with the batch size, not with the actual overlap depth of the cell.
+- **Cost (branchless inner loop)**: The very feature that removes divergence also removes the ability to skip absent habitats: the inner loop performs $H = \text{num-habitats}$ iterations for every invaded cell, regardless of how many habitats truly occupy it. The accumulation cost thus scales with the batch size, not with the actual overlap depth of the cell.
 - **Cost (register pressure)**: Each work-item maintains two private `int[MAX_BATCH_SIZE]` arrays (`run_invaded` and `private_destroyed`), i.e., up to 512 bytes of private state. This footprint tends to spill registers, lowering the number of concurrent wavefronts and hence the hardware occupancy.
 
 Consequently, the map-centric kernel only outperforms the habitat-centric baselines once the average overlap depth is high enough for the RNG-reuse saving to overcome both the $H$-wide inner loop and the increased register pressure.
@@ -701,16 +711,16 @@ Consequently, the map-centric kernel only outperforms the habitat-centric baseli
 #### Time Complexity
 The time complexity is again divided into the two principal components:
 1. **Sampling and Monte Carlo Run**: Each work-item processes $R/P$ runs. Within a run, it sweeps the $M$ map cells, and in the worst case (every cell invaded) the branchless inner loop executes $H$ iterations per cell, yielding $\mathcal{O}(M \cdot H)$ work per run. The sampling phase therefore costs:
-   $$
+$$
    \mathcal{O}\left(\frac{R}{P} \cdot M \cdot H\right)
-   $$
+$$
 2. **Reduction**: The two-dimensional tree reduction operates over the $L$ lanes of the work-group for each of the $H$ habitat rows, resulting in $\mathcal{O}(H \cdot \log_2 L)$.
 
 The overall time complexity is:
 $$
 T(M, H, R, P, L) = \mathcal{O}\left(\frac{R}{P} \cdot M \cdot H + H \cdot \log_2 L\right)
 $$
-Since $H$ is bounded by the hardware constant $\text{MAX\_BATCH\_SIZE} = 64$, this is asymptotically $\mathcal{O}\left(\frac{R}{P} \cdot M + \log_2 L\right)$.
+Since $H$ is bounded by the hardware constant $\text{MAX-BATCH-SIZE} = 64$, this is asymptotically $\mathcal{O}\left(\frac{R}{P} \cdot M + \log_2 L\right)$.
 
 #### Space Complexity
 - **Global Memory**: The kernel reads the full-map `p_vec` ($\mathcal{O}(M)$ floats) and `habitat_mask` ($\mathcal{O}(M)$ ulongs), plus the per-habitat `hab_total_cells` and `hab_thresholds` ($\mathcal{O}(H)$ each). In output it writes the `partial` array of $H$ rows by $n_{wg} = P/L$ columns. The total global memory complexity is $\mathcal{O}(M + H \cdot P/L)$.
@@ -819,6 +829,7 @@ The scan is performed on the predicates array. Taking the example given before:
 $$
 [1, 0, 0, 1, 1] -> [0, 1, 1, 1, 2, 3]
 $$
+
 
 
 ```python
@@ -1519,7 +1530,9 @@ Three scoring formulas are applied, one per benchmark category:
 ### A - Scaling Sweeps (`simulation_scaling`, `habitat_scaling`, `size_scaling`)
 **Score = Geometric Mean of Throughput (M-Sim/s)** across all sweep points and all kernels.
 
-$$\text{Score}_A = \left(\prod_{i=1}^{n} T_i\right)^{1/n}$$
+$$
+\text{Score}_A = \left(\prod_{i=1}^{n} T_i\right)^{1/n}
+$$
 
 where $T_i$ is the throughput (Simulations/s) of the $i$-th measurement point.
 
@@ -1530,12 +1543,16 @@ where $T_i$ is the throughput (Simulations/s) of the $i$-th measurement point.
 ### B — LWS/GWS Sweep (`lws_gws_sweep`)
 **Score = Peak Throughput (M-Sim/s)** — the single best configuration observed.
 
-$$\text{Score}_B = \max_i(T_i)$$
+$$
+\text{Score}_B = \max_i(T_i)
+$$
 
 ### C — RNG Efficiency (`rng_vs_norng`)
 **Score = RNG Efficiency Factor (%)** — mean ratio of throughput *with* vs *without* RNG across all kernels.
 
-$$\text{Score}_C = \frac{1}{K}\sum_{k=1}^{K} \frac{T_k^{\text{RNG}}}{T_k^{\text{no-RNG}}} \times 100$$
+$$
+\text{Score}_C = \frac{1}{K}\sum_{k=1}^{K} \frac{T_k^{\text{RNG}}}{T_k^{\text{no-RNG}}} \times 100
+$$
 
 A value closer to 100 % indicates that the PRNG overhead is minimal for that architecture.
 
